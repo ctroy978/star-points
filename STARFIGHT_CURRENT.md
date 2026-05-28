@@ -83,3 +83,29 @@ Then open http://localhost:3000 on the server machine. The server prints the act
 ---
 
 This is the current working baseline. All major mechanics the user originally requested are implemented and tested, including the important combat fix where surviving fighters return home.
+
+---
+
+## May 2026 Refactor: Teams + Roles + Persistence (Current)
+
+**Major changes implemented in this iteration:**
+- Fundamental shift from solo players → **teams of exactly 3**
+- Three distinct roles with dedicated UI sections:
+  - **War Commander**: Launches attacks, sees fleets
+  - **Negotiator**: Titanium trading between teams
+  - **Builder**: Production queue (Miners + Fighters + Canons). Miners increase passive income.
+- All three role panels are **always visible** to every team member. Controls are only active for the assigned role player.
+- **SQLite persistence** (`starpoint.db` via `better-sqlite3`):
+  - Games, teams, player role assignments, resources, miners/fighters/canons, in-transit fleets all survive server restarts.
+- New lobby flow: players join with `CODE + Team Name + Personal Name`. Roles assigned automatically on join order.
+- Game only starts when ≥2 teams are complete (3 players each).
+- Economy now scales with Miners. Combat/trading still fast and classroom-friendly.
+- Terminal aesthetic preserved. Zero build step.
+
+**Files changed:**
+- `server.js` — heavily refactored for teams
+- `db.js` — new persistence layer
+- `public/index.html` — complete 3-panel role UI
+- `package.json` — added better-sqlite3
+
+The game is now in a playable "team foundation" state. Future iterations can layer on comms, spies, more unit types, etc. on this solid base.

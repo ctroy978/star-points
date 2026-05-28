@@ -1,6 +1,17 @@
-# STARFIGHT - Classroom Edition
+# STAR POINT - Team Edition (Classroom)
 
-A fast, simple real-time fleet combat + trading game designed for 10th grade classrooms. Runs entirely in Chrome on Chromebooks. One central server (your laptop or classroom computer) behind your school firewall.
+**Current version:** Teams of 3 with distinct roles (War Commander / Negotiator / Builder)
+
+A fast, real-time strategy game designed for 10th grade classrooms. Players form teams of exactly three and must coordinate using their assigned role. Runs entirely in Chrome on Chromebooks from a single classroom server.
+
+**Core loop (this iteration):**
+- 3 roles per team with separate UI panels
+- Builder produces miners (income) + fighters + defense
+- Negotiator handles titanium trading between teams
+- War Commander launches attacks
+- SQLite persistence so games survive between class periods
+
+See STARFIGHT_CURRENT.md for the latest detailed state.
 
 ## Quick Start (Teacher)
 

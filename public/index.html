@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>STARFIGHT — CLASSROOM EDITION</title>
+<title>STAR POINT — TEAM EDITION</title>
 <style>
   :root {
     --green: #00ff9f;
@@ -19,18 +19,18 @@
     background: var(--bg);
     color: var(--green);
     font-family: "Courier New", "Consolas", "Lucida Console", monospace;
-    font-size: 15px;
+    font-size: 14px;
     line-height: 1.35;
   }
   .container {
-    max-width: 1100px;
+    max-width: 1280px;
     margin: 0 auto;
-    padding: 12px 16px;
+    padding: 10px 14px;
   }
   .header {
     border: 2px solid var(--green);
-    padding: 8px 14px;
-    margin-bottom: 12px;
+    padding: 6px 12px;
+    margin-bottom: 10px;
     background: #050505;
   }
   .header-top {
@@ -38,351 +38,275 @@
     justify-content: space-between;
     align-items: center;
     flex-wrap: wrap;
-    gap: 8px;
+    gap: 6px;
   }
-  .title {
-    font-size: 22px;
-    font-weight: bold;
-    letter-spacing: 3px;
-  }
-  .status-bar {
-    font-size: 13px;
-    color: var(--green-dim);
+  .title { font-size: 20px; font-weight: bold; letter-spacing: 2px; }
+  .status-bar { font-size: 12px; color: var(--green-dim); }
+  .role-badge {
+    background: #003322;
+    color: var(--amber);
+    padding: 1px 8px;
+    border: 1px solid var(--amber);
+    font-size: 11px;
   }
   .panel {
     border: 1px solid var(--green-dim);
     background: var(--panel);
-    padding: 10px 12px;
-    margin-bottom: 10px;
+    padding: 8px 10px;
+    margin-bottom: 8px;
   }
   .panel-title {
-    font-size: 13px;
+    font-size: 12px;
     color: var(--green-dim);
-    margin-bottom: 6px;
+    margin-bottom: 5px;
     text-transform: uppercase;
     letter-spacing: 1px;
-  }
-  .big-number {
-    font-size: 28px;
-    line-height: 1;
-    font-weight: bold;
-  }
-  .stat-row {
     display: flex;
     justify-content: space-between;
-    margin: 3px 0;
   }
-  .hp-bar {
-    height: 18px;
-    background: #220000;
-    border: 1px solid var(--red);
-    margin: 4px 0 8px;
-    position: relative;
+  .panel-title.active { color: var(--amber); border-bottom: 1px solid #004433; }
+  .role-section {
+    border: 1px solid #003322;
+    padding: 6px 8px;
+    margin-bottom: 8px;
+    background: #050505;
   }
-  .hp-fill {
-    height: 100%;
-    background: var(--red);
-    transition: width 0.2s linear;
-  }
-  .hp-text {
-    position: absolute;
-    top: 0; left: 0; right: 0; bottom: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 12px;
-    font-weight: bold;
-    color: #fff;
-    text-shadow: 0 0 3px #000;
-  }
-  .player-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-    gap: 10px;
-  }
-  .player-card {
-    border: 1px solid var(--green-dim);
-    padding: 8px 10px;
-    background: #111;
-  }
-  .player-card.dead {
-    border-color: #440000;
-    color: #664444;
-    opacity: 0.7;
-  }
-  .player-name {
-    font-weight: bold;
-    font-size: 16px;
+  .role-section.yours { border-color: var(--amber); }
+  .role-section .role-header {
+    font-size: 11px;
+    color: #006633;
     margin-bottom: 4px;
+    letter-spacing: 1px;
   }
-  .btn {
-    background: #000;
-    color: var(--green);
-    border: 1px solid var(--green);
-    padding: 6px 14px;
-    font-family: inherit;
-    font-size: 14px;
-    cursor: pointer;
-    margin: 2px 4px 2px 0;
-    transition: all 0.1s;
+  .role-section.yours .role-header { color: var(--amber); }
+  .big-number { font-size: 22px; font-weight: bold; line-height: 1; }
+  .stat-row { display: flex; justify-content: space-between; margin: 2px 0; font-size: 13px; }
+  .hp-bar {
+    height: 14px; background: #220000; border: 1px solid var(--red);
+    margin: 3px 0 6px; position: relative;
   }
-  .btn:hover {
-    background: var(--green);
-    color: #000;
+  .hp-fill { height: 100%; background: var(--red); transition: width 0.2s linear; }
+  .hp-text {
+    position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10px; font-weight: bold; color: #fff; text-shadow: 0 0 2px #000;
   }
-  .btn:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
+  .teams-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 6px;
   }
-  .btn-danger {
-    border-color: var(--red);
-    color: var(--red);
-  }
-  .btn-danger:hover {
-    background: var(--red);
-    color: #000;
-  }
-  .btn-small {
-    padding: 3px 9px;
+  .team-card {
+    border: 1px solid var(--green-dim);
+    padding: 5px 7px;
+    background: #111;
     font-size: 12px;
   }
+  .team-card.dead { border-color: #440000; color: #664444; opacity: 0.7; }
+  .team-name { font-weight: bold; font-size: 13px; }
+  .btn {
+    background: #000; color: var(--green);
+    border: 1px solid var(--green);
+    padding: 4px 10px;
+    font-family: inherit; font-size: 12px;
+    cursor: pointer; margin: 2px 3px 2px 0;
+  }
+  .btn:hover { background: var(--green); color: #000; }
+  .btn:disabled { opacity: 0.35; cursor: not-allowed; }
+  .btn-danger { border-color: var(--red); color: var(--red); }
+  .btn-danger:hover { background: var(--red); color: #000; }
+  .btn-small { padding: 2px 6px; font-size: 11px; }
   input, select {
-    background: #000;
-    color: var(--green);
+    background: #000; color: var(--green);
     border: 1px solid var(--green-dim);
-    font-family: inherit;
-    padding: 5px 8px;
-    font-size: 15px;
+    font-family: inherit; padding: 4px 6px; font-size: 13px;
   }
   .log {
-    height: 160px;
-    overflow-y: auto;
-    background: #050505;
-    border: 1px solid #222;
-    padding: 8px;
-    font-size: 13px;
-    white-space: pre-wrap;
+    height: 130px; overflow-y: auto;
+    background: #050505; border: 1px solid #222;
+    padding: 5px 7px; font-size: 12px; white-space: pre-wrap;
   }
   .log-line { margin: 1px 0; }
   .log-attack { color: var(--red); }
   .log-good { color: #66ffaa; }
   .log-system { color: #aaccff; }
   .fleet-list {
-    font-size: 13px;
-    background: #050505;
-    padding: 6px 8px;
-    min-height: 42px;
+    font-size: 12px; background: #050505; padding: 4px 6px; min-height: 32px;
   }
-  .section-title {
-    font-size: 11px;
-    letter-spacing: 2px;
-    color: #006633;
-    margin: 12px 0 4px;
-  }
+  .section-title { font-size: 10px; letter-spacing: 1.5px; color: #006633; margin: 6px 0 3px; }
   .mono { font-family: "Courier New", monospace; }
   .center { text-align: center; }
   .big-banner {
-    font-size: 42px;
-    font-weight: bold;
-    letter-spacing: 4px;
-    padding: 20px;
-    border: 3px solid var(--green);
-    margin: 20px 0;
-    text-align: center;
-  }
-  .eliminated {
-    color: var(--red);
-    border-color: var(--red);
-    animation: blink 1.5s infinite;
-  }
-  @keyframes blink {
-    50% { opacity: 0.6; }
+    font-size: 32px; font-weight: bold; letter-spacing: 3px;
+    padding: 14px; border: 3px solid var(--green); margin: 12px 0; text-align: center;
   }
   .hidden { display: none !important; }
-  .ascii {
-    font-size: 11px;
-    line-height: 1.1;
-    color: #006633;
-    white-space: pre;
+  .three-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 8px;
   }
-  .controls {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    align-items: center;
+  @media (max-width: 900px) {
+    .three-col { grid-template-columns: 1fr; }
   }
-  .number-input {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-  }
-  .number-input button {
-    width: 28px;
-    height: 28px;
-  }
-  .stat-label {
-    color: #006633;
-    font-size: 12px;
-  }
+  .disabled-note { font-size: 10px; color: #664433; margin-top: 3px; }
 </style>
 </head>
 <body>
 <div class="container">
-
   <!-- HEADER -->
   <div class="header">
     <div class="header-top">
       <div>
-        <span class="title">★ STARFIGHT ★</span>
-        <span style="font-size:13px; color:#006633;">CLASSROOM EDITION</span>
+        <span class="title">★ STAR POINT ★</span>
+        <span style="color:#006633; font-size:11px;">TEAM EDITION</span>
       </div>
       <div id="header-info" class="status-bar">
-        <span id="game-code">NO SESSION</span> &nbsp;|&nbsp; 
+        <span id="game-code">NO SESSION</span> &nbsp;|&nbsp;
         <span id="game-status">WAITING FOR CONNECTION</span>
       </div>
     </div>
+    <div id="team-role-bar" class="hidden" style="margin-top:6px; font-size:13px; border-top:1px solid #222; padding-top:5px;">
+      <strong>TEAM:</strong> <span id="my-team-name"></span>
+      &nbsp;&nbsp;|&nbsp;&nbsp;
+      <strong>YOU:</strong> <span id="my-role" class="role-badge"></span>
+      &nbsp;&nbsp;Teammates: <span id="teammates"></span>
+    </div>
   </div>
 
-  <!-- INITIAL JOIN SCREEN -->
+  <!-- JOIN / LOBBY SCREEN -->
   <div id="join-screen">
-    <div class="panel">
-      <div class="panel-title">CONNECT TO CLASS SESSION</div>
-      <p style="margin:8px 0 14px;">Enter the 4-character invite code your teacher gave you, then choose a solar system name.</p>
-
-      <div style="display:flex; flex-wrap:wrap; gap:12px; align-items:flex-end;">
-        <div>
-          <div class="stat-label">INVITE CODE</div>
-          <input id="join-code" type="text" maxlength="4" placeholder="K9RX" style="width:110px; text-transform:uppercase; font-size:20px; letter-spacing:3px;">
-        </div>
-        <div>
-          <div class="stat-label">YOUR SOLAR SYSTEM NAME</div>
-          <input id="join-name" type="text" maxlength="14" placeholder="Aether" style="width:170px; font-size:16px;">
-        </div>
-        <button class="btn" onclick="joinGame()" style="height:36px; padding:0 22px;">JOIN GAME</button>
+    <!-- TEACHER / HOST PATH -->
+    <div id="teacher-panel" class="panel" style="margin-bottom:14px; border: 2px solid var(--amber);">
+      <div class="panel-title" style="color: var(--amber);">TEACHER / HOST</div>
+      <div style="margin-bottom:6px;">
+        <input id="host-name" type="text" maxlength="20" placeholder="Ms. Rivera (optional)" style="width:220px;">
+        <button class="btn" onclick="createAsHost()" style="padding:6px 20px; margin-left:8px; font-size:14px;">CREATE NEW GAME SESSION</button>
+      </div>
+      <div style="font-size:11px; color:#664400;">
+        You will receive a code to give to the class. You do <strong>not</strong> join a team.
       </div>
 
-      <div style="margin-top:18px; border-top:1px solid #222; padding-top:12px;">
-        <span style="color:#006633;">TEACHER?</span>
-        <button class="btn" onclick="createGame()" style="margin-left:10px;">CREATE NEW GAME SESSION</button>
+      <div id="host-reclaim" style="margin-top:10px; padding-top:8px; border-top:1px dashed #664400; font-size:11px;">
+        Refreshed? Reclaim host status:
+        <input id="reclaim-code" type="text" maxlength="4" placeholder="K9RX" style="width:70px; text-transform:uppercase;">
+        <button class="btn btn-small" onclick="reclaimAsHost()">Reclaim as Host</button>
       </div>
     </div>
 
-    <div class="panel" style="font-size:13px; color:#006633;">
-      <strong>Quick rules:</strong> Build fighters (20 Ti, 30s) and defense canons (10 Ti, 60s).<br>
-      Send fighters to destroy other factories. Last one alive wins. You get +4 Ti every 15 seconds.
+    <!-- STUDENT PATH -->
+    <div class="panel">
+      <div class="panel-title">STUDENTS — JOIN A TEAM</div>
+      <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:flex-end;">
+        <div>
+          <div class="section-title">INVITE CODE</div>
+          <input id="join-code" type="text" maxlength="4" placeholder="K9RX" style="width:100px; text-transform:uppercase; font-size:18px; letter-spacing:3px;">
+        </div>
+        <div>
+          <div class="section-title">YOUR TEAM NAME</div>
+          <input id="join-team" type="text" maxlength="16" placeholder="Red Wolves" style="width:150px;">
+        </div>
+        <div>
+          <div class="section-title">YOUR NAME</div>
+          <input id="join-name" type="text" maxlength="14" placeholder="Alex" style="width:120px;">
+        </div>
+        <div style="padding-bottom:2px;">
+          <button class="btn" onclick="joinGame()" style="padding:6px 18px;">JOIN TEAM</button>
+        </div>
+      </div>
+      <div style="margin-top:8px; font-size:11px; color:#006633;">
+        Each team needs exactly 3 players. Roles assigned automatically: <strong>War Commander → Negotiator → Builder</strong>.
+      </div>
     </div>
   </div>
 
   <!-- LOBBY -->
   <div id="lobby-screen" class="hidden">
     <div class="panel">
-      <div class="panel-title">WAITING FOR PLAYERS — CODE: <span id="lobby-code" style="font-size:20px;letter-spacing:4px;"></span></div>
-      <div id="lobby-players"></div>
-      <div style="margin-top:12px;">
-        <button id="btn-start" class="btn" onclick="startGame()" style="font-size:16px; padding:8px 24px;">START GAME</button>
-        <span style="color:#006633; font-size:12px;">(Host only — needs at least 2 players)</span>
+      <div class="panel-title">WAITING FOR TEAMS — CODE: <span id="lobby-code" style="font-size:18px;letter-spacing:3px;"></span></div>
+      <div id="lobby-teams" style="margin:8px 0;"></div>
+      <div style="margin-top:8px;">
+        <button id="btn-start" class="btn" onclick="startGame()" style="font-size:15px; padding:6px 22px;">START GAME (needs 2+ full teams)</button>
+        <button class="btn" onclick="newSession()" style="margin-left:8px;">LEAVE SESSION</button>
+      </div>
+      <div id="lobby-host-note" class="hidden" style="margin-top:6px; font-size:11px; color:#664400;">
+        Only the host can start the game.
+      </div>
+      <div style="font-size:11px; color:#006633; margin-top:6px;">
+        Host can start once at least two teams have all three roles filled.
       </div>
     </div>
   </div>
 
   <!-- MAIN GAME SCREEN -->
   <div id="game-screen" class="hidden">
+    <div class="three-col">
 
-    <!-- YOUR SYSTEM -->
-    <div class="panel">
-      <div class="panel-title">YOUR SOLAR SYSTEM — <span id="my-name"></span> <span id="host-badge" class="hidden" style="color:#ffcc33;font-size:11px;">[HOST]</span></div>
-      
-      <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:14px;">
-        <!-- Titanium -->
-        <div>
-          <div class="stat-label">TITANIUM</div>
-          <div id="my-ti" class="big-number">100</div>
-        </div>
-        <!-- Fighters -->
-        <div>
-          <div class="stat-label">FIGHTERS (FTR)</div>
-          <div id="my-fighters" class="big-number">0</div>
-          <div style="font-size:11px;color:#006633;">20 Ti • 30s build</div>
-        </div>
-        <!-- Canons -->
-        <div>
-          <div class="stat-label">DEFENSE CANONS (DCN)</div>
-          <div id="my-canons" class="big-number">0</div>
-          <div style="font-size:11px;color:#006633;">10 Ti • 60s build</div>
-        </div>
-      </div>
-
-      <!-- Factory HP -->
-      <div style="margin-top:8px;">
-        <div class="stat-label">FACTORY INTEGRITY</div>
-        <div class="hp-bar">
-          <div id="my-hp-fill" class="hp-fill" style="width:100%"></div>
-          <div id="my-hp-text" class="hp-text">100 / 100</div>
-        </div>
-      </div>
-
-      <div id="eliminated-banner" class="hidden" style="color:var(--red);font-size:18px;font-weight:bold;margin-top:4px;">
-        ★ FACTORY DESTROYED — YOU ARE ELIMINATED ★
-      </div>
-    </div>
-
-    <!-- OTHER SYSTEMS -->
-    <div class="panel">
-      <div class="panel-title">OTHER SOLAR SYSTEMS</div>
-      <div id="other-players" class="player-grid"></div>
-    </div>
-
-    <!-- BUILD + ACTIONS ROW -->
-    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px;">
-      
-      <!-- BUILD -->
-      <div class="panel">
-        <div class="panel-title">FACTORY BUILD QUEUE</div>
-        
-        <div id="build-status" style="margin-bottom:8px; min-height:42px;"></div>
-        
-        <div class="controls">
-          <button class="btn" onclick="queueBuild('fighter')">QUEUE FIGHTER (20 Ti)</button>
-          <button class="btn" onclick="queueBuild('canon')">QUEUE CANON (10 Ti)</button>
-        </div>
-        <div style="font-size:11px;color:#006633;margin-top:4px;">Max queue: 4 • One at a time</div>
-      </div>
-
-      <!-- ATTACK -->
-      <div class="panel">
-        <div class="panel-title">LAUNCH ATTACK FLEET</div>
-        
-        <div class="controls" style="margin-bottom:6px;">
-          <select id="attack-target" style="min-width:130px;"></select>
-          <div class="number-input">
+      <!-- WAR COMMANDER PANEL -->
+      <div class="role-section" id="war-section">
+        <div class="role-header">WAR COMMANDER — ATTACKS &amp; FLEETS</div>
+        <div class="panel" style="margin:0 0 6px 0; padding:6px 8px;">
+          <div class="stat-row"><span>Fighters available</span><span id="war-fighters" class="big-number" style="font-size:20px;">0</span></div>
+          <div style="margin:6px 0 4px;">
+            <select id="attack-target" style="width:120px;"></select>
+            <input id="attack-num" type="number" value="5" min="1" style="width:46px; text-align:center; margin:0 2px;">
             <button class="btn btn-small" onclick="adjustAttack(-1)">−</button>
-            <input id="attack-num" type="number" value="5" min="1" max="99" style="width:52px;text-align:center;">
             <button class="btn btn-small" onclick="adjustAttack(1)">+</button>
+            <button class="btn" onclick="launchAttack()" id="btn-attack">LAUNCH</button>
           </div>
-          <button class="btn" onclick="launchAttack()">LAUNCH</button>
+          <div style="font-size:10px; color:#006633;">8s travel • Canons intercept 1:1 • Survivors return</div>
+          <div id="attack-disabled" class="disabled-note hidden">View only — you are not the War Commander</div>
         </div>
-        <div style="font-size:11px;color:#006633;">Travel time: 8 seconds • Canons intercept 1:1</div>
+
+        <div class="panel" style="margin:0; padding:6px 8px;">
+          <div class="panel-title">FLEETS IN TRANSIT</div>
+          <div id="fleets" class="fleet-list">No fleets in space.</div>
+        </div>
+      </div>
+
+      <!-- NEGOTIATOR PANEL -->
+      <div class="role-section" id="neg-section">
+        <div class="role-header">NEGOTIATOR — TITANIUM &amp; TRADING</div>
+        <div class="panel" style="margin:0 0 6px 0; padding:6px 8px;">
+          <div class="stat-row"><span>Your Team Titanium</span><span id="neg-ti" class="big-number" style="font-size:20px;">0</span></div>
+          <div style="margin-top:6px;">
+            <select id="trade-target" style="width:120px;"></select>
+            <button class="btn btn-small" onclick="transferTi(10)">SEND 10</button>
+            <button class="btn btn-small" onclick="transferTi(25)">25</button>
+            <button class="btn btn-small" onclick="transferTi(50)">50</button>
+          </div>
+          <div style="font-size:10px; color:#006633;">Instant transfer to any living team</div>
+          <div id="trade-disabled" class="disabled-note hidden">View only — you are not the Negotiator</div>
+        </div>
+
+        <div class="panel" style="margin:0; padding:6px 8px;">
+          <div class="panel-title">OTHER TEAMS</div>
+          <div id="other-teams" class="teams-grid"></div>
+        </div>
+      </div>
+
+      <!-- BUILDER PANEL -->
+      <div class="role-section" id="builder-section">
+        <div class="role-header">BUILDER — PRODUCTION &amp; ECONOMY</div>
+        <div class="panel" style="margin:0 0 6px 0; padding:6px 8px;">
+          <div class="stat-row"><span>Miners</span><span id="build-miners" class="big-number" style="font-size:20px;">0</span></div>
+          <div class="stat-row" style="font-size:11px;"><span>Income / cycle</span><span id="build-income">+5 Ti</span></div>
+          <div style="margin:6px 0 4px;">
+            <button class="btn btn-small" onclick="queueBuild('miner')">+ MINER (30 Ti, 45s)</button>
+            <button class="btn btn-small" onclick="queueBuild('fighter')">+ FTR (20 Ti)</button>
+            <button class="btn btn-small" onclick="queueBuild('canon')">+ DCN (10 Ti)</button>
+          </div>
+          <div id="build-disabled" class="disabled-note hidden">View only — you are not the Builder</div>
+        </div>
+
+        <div class="panel" style="margin:0; padding:6px 8px;">
+          <div class="panel-title">PRODUCTION QUEUE</div>
+          <div id="build-status" style="min-height:42px; font-size:12px;"></div>
+        </div>
       </div>
     </div>
 
-    <!-- TRADE -->
-    <div class="panel">
-      <div class="panel-title">TRANSFER TITANIUM (TRADING)</div>
-      <div class="controls">
-        <select id="trade-target" style="min-width:130px;"></select>
-        <button class="btn" onclick="transferTi(10)">SEND 10 Ti</button>
-        <button class="btn" onclick="transferTi(25)">SEND 25 Ti</button>
-        <button class="btn" onclick="transferTi(50)">SEND 50 Ti</button>
-      </div>
-    </div>
-
-    <!-- IN TRANSIT -->
-    <div class="panel">
-      <div class="panel-title">FLEETS IN TRANSIT</div>
-      <div id="fleets" class="fleet-list">No fleets in space.</div>
-    </div>
-
-    <!-- EVENT LOG -->
+    <!-- SHARED: EVENT LOG -->
     <div class="panel">
       <div class="panel-title">EVENT LOG</div>
       <div id="event-log" class="log"></div>
@@ -394,14 +318,13 @@
       <button class="btn btn-danger" onclick="endGame()">END GAME EARLY</button>
       <button class="btn" onclick="newSession()">NEW SESSION</button>
     </div>
-
   </div>
 
-  <!-- GAME OVER BANNER -->
+  <!-- GAME OVER -->
   <div id="game-over" class="hidden">
     <div id="winner-banner" class="big-banner"></div>
     <div class="center">
-      <button class="btn" onclick="newSession()" style="font-size:16px;padding:10px 30px;">START A NEW GAME</button>
+      <button class="btn" onclick="newSession()" style="font-size:15px; padding:8px 28px;">START A NEW GAME</button>
     </div>
   </div>
 
@@ -409,15 +332,53 @@
 
 <script src="/socket.io/socket.io.js"></script>
 <script>
-// ============== CLIENT LOGIC ==============
+// ============== CLIENT LOGIC (Team + Role Edition) ==============
 const socket = io();
+
+// IMPORTANT: Students should only use the main URL (/).
+// Teachers use /host to access creation and host controls.
+// This is UI separation only (a student who guesses /host could still access it).
+const IS_HOST_PAGE = window.location.pathname === '/host' || window.location.pathname.startsWith('/host/');
 
 let currentCode = null;
 let myPlayerName = null;
+let myTeamName = null;
+let myRole = null;           // 'war' | 'negotiator' | 'builder'
 let isHost = false;
 let lastState = null;
 
-// Utility
+// Configure UI based on whether this is the teacher host page or student page
+function configurePageForRole() {
+  const teacherPanel = document.getElementById('teacher-panel');
+  const reclaimDiv = document.querySelector('#join-screen .panel div[style*="dashed"]');
+
+  if (IS_HOST_PAGE) {
+    // Teacher mode - show everything, add strong warning
+    document.title = 'STAR POINT — TEACHER HOST';
+
+    // Add a clear warning banner at the very top of the container if it doesn't exist
+    const container = document.querySelector('.container');
+    if (container && !document.getElementById('host-warning')) {
+      const banner = document.createElement('div');
+      banner.id = 'host-warning';
+      banner.style.cssText = 'background:#331100; color:#ffaa66; border:2px solid #ff6600; padding:8px 12px; margin-bottom:10px; font-size:13px;';
+      banner.innerHTML = '<strong>⚠ TEACHER / HOST INTERFACE</strong> — Do not share this URL with students. Students should use the normal address without /host.';
+      container.insertBefore(banner, container.firstChild);
+    }
+  } else {
+    // Student mode - completely hide the teacher creation panel and reclaim
+    document.title = 'STAR POINT — Join Your Team';
+
+    if (teacherPanel) teacherPanel.style.display = 'none';
+
+    const reclaimSection = document.getElementById('host-reclaim');
+  if (reclaimSection) reclaimSection.style.display = 'none';
+  }
+}
+
+// Run configuration as early as possible
+configurePageForRole();
+
 function el(id) { return document.getElementById(id); }
 function show(id) { el(id).classList.remove('hidden'); }
 function hide(id) { el(id).classList.add('hidden'); }
@@ -429,54 +390,90 @@ function logEvent(text, cls = '') {
   line.textContent = text;
   log.appendChild(line);
   log.scrollTop = log.scrollHeight;
-  if (log.children.length > 22) log.removeChild(log.firstChild);
+  if (log.children.length > 24) log.removeChild(log.firstChild);
 }
 
-// ===== CONNECTION & JOIN FLOW =====
-function createGame() {
-  // Prefer the name field if the teacher typed one; otherwise prompt
-  let name = el('join-name').value.trim();
-  if (!name) {
-    name = prompt("Enter your solar system name (as the host):", "Sol Prime") || "Host";
+// ===== CONNECTION FLOW =====
+function createAsHost() {
+  if (!IS_HOST_PAGE) {
+    alert('Host functions are only available on the teacher interface (/host).');
+    return;
   }
-  socket.emit('createGame', { playerName: name }, (res) => {
+  const name = el('host-name').value.trim();
+  socket.emit('createGame', { hostName: name }, (res) => {
     if (!res.ok) { alert(res.error); return; }
     currentCode = res.code;
-    myPlayerName = res.playerName;
+    myPlayerName = res.hostName || 'Teacher';
+    myTeamName = null;
+    myRole = null;
     isHost = true;
     hide('join-screen');
     show('lobby-screen');
     el('lobby-code').textContent = currentCode;
     el('game-code').textContent = 'CODE: ' + currentCode;
-    el('game-status').textContent = 'WAITING FOR PLAYERS';
+    el('game-status').textContent = 'WAITING FOR TEAMS (you are the host)';
   });
 }
 
-function joinGame() {
-  const code = el('join-code').value.trim().toUpperCase();
-  const name = el('join-name').value.trim();
-  if (!code || code.length !== 4) { alert('Enter the 4-character code'); return; }
-  if (!name) { alert('Enter a solar system name'); return; }
+// Old student create path is removed — students always use joinGame
 
-  socket.emit('joinGame', { code, playerName: name }, (res) => {
+function reclaimAsHost() {
+  if (!IS_HOST_PAGE) {
+    alert('Host functions are only available on the teacher interface (/host).');
+    return;
+  }
+  const code = el('reclaim-code').value.trim().toUpperCase();
+  if (!code || code.length !== 4) { alert('Enter the 4-character code'); return; }
+
+  socket.emit('reclaimAsHost', { code }, (res) => {
     if (!res.ok) {
       alert(res.error);
       return;
     }
     currentCode = res.code;
+    myPlayerName = res.hostName || 'Teacher';
+    myTeamName = null;
+    myRole = null;
+    isHost = true;
+
+    hide('join-screen');
+    show('lobby-screen');
+    el('lobby-code').textContent = currentCode;
+    el('game-code').textContent = 'CODE: ' + currentCode;
+    el('game-status').textContent = 'RECONNECTED AS HOST';
+  });
+}
+
+function joinGame() {
+  const code = el('join-code').value.trim().toUpperCase();
+  const team = el('join-team').value.trim();
+  const name = el('join-name').value.trim();
+  if (!code || code.length !== 4) { alert('Enter the 4-character code'); return; }
+  if (!team || !name) { alert('Enter both team name and your name'); return; }
+
+  socket.emit('joinGame', { code, teamName: team, playerName: name }, (res) => {
+    if (!res.ok) {
+      alert(res.error);
+      return;
+    }
+    currentCode = res.code;
+    myTeamName = res.teamName;
     myPlayerName = res.playerName;
+    myRole = res.role;
     isHost = res.isHost;
 
     hide('join-screen');
+    show('lobby-screen');
+    el('lobby-code').textContent = currentCode;
     el('game-code').textContent = 'CODE: ' + currentCode;
     el('game-status').textContent = 'CONNECTED — WAITING FOR START';
   });
 }
 
-// ===== GAME ACTIONS =====
+// ===== ACTIONS (role gated on server too) =====
 function startGame() {
   socket.emit('startGame', (res) => {
-    if (!res.ok) alert(res.error || 'Cannot start');
+    if (res && !res.ok) alert(res.error || 'Cannot start');
   });
 }
 
@@ -496,16 +493,16 @@ function adjustAttack(delta) {
 function launchAttack() {
   const target = el('attack-target').value;
   const num = parseInt(el('attack-num').value) || 1;
-  if (!target) { alert('Choose a target'); return; }
-  socket.emit('launchAttack', { targetName: target, numFighters: num }, (res) => {
+  if (!target) { alert('Choose a target team'); return; }
+  socket.emit('launchAttack', { targetTeam: target, numFighters: num }, (res) => {
     if (res && !res.ok && res.error) alert(res.error);
   });
 }
 
 function transferTi(amount) {
   const target = el('trade-target').value;
-  if (!target) { alert('Choose a recipient'); return; }
-  socket.emit('transferTi', { targetName: target, amount }, (res) => {
+  if (!target) { alert('Choose a recipient team'); return; }
+  socket.emit('transferTi', { targetTeam: target, amount }, (res) => {
     if (res && !res.ok && res.error) alert(res.error);
   });
 }
@@ -516,20 +513,37 @@ function endGame() {
 }
 
 function newSession() {
-  location.reload();   // simplest way for teacher
+  location.reload();
 }
 
 // ===== RENDERING =====
 function render(state) {
   lastState = state;
-  const myPlayer = state.players.find(p => p.name === myPlayerName);
-  const isEliminated = myPlayer && myPlayer.factoryHP <= 0;
 
   // Header
-  el('game-status').textContent = state.status.toUpperCase() + (state.winner ? ' — ' + state.winner + ' WINS' : '');
   el('game-code').textContent = 'CODE: ' + state.code;
+  el('game-status').textContent = state.status.toUpperCase() + (state.winner ? ' — ' + state.winner + ' WINS' : '');
 
-  // Switch to game screen if needed
+  // My personal info
+  if (state.myTeam && state.myRole) {
+    show('team-role-bar');
+    el('my-team-name').textContent = state.myTeam;
+    el('my-role').textContent = state.myRoleLabel || state.myRole.toUpperCase();
+
+    const myTeam = state.teams.find(t => t.name === state.myTeam);
+    if (myTeam) {
+      const others = myTeam.members.filter(m => m.name !== myPlayerName).map(m => `${m.name} (${m.label})`).join(', ');
+      el('teammates').textContent = others || '—';
+    }
+  } else if (state.isHost && !state.myRole) {
+    // Pure host / teacher observer
+    show('team-role-bar');
+    el('my-team-name').textContent = '— (Host / Teacher)';
+    el('my-role').textContent = 'HOST / OBSERVER';
+    el('teammates').textContent = 'Not on any team';
+  }
+
+  // Switch screens
   if (state.status === 'waiting') {
     hide('game-screen');
     hide('game-over');
@@ -553,128 +567,152 @@ function render(state) {
 
   show('game-screen');
 
-  // Host badge + controls
+  // Host controls
   if (state.isHost) {
     show('host-controls');
-    show('host-badge');
   } else {
     hide('host-controls');
-    hide('host-badge');
   }
 
-  // My stats
-  if (myPlayer) {
-    el('my-name').textContent = myPlayer.name;
-    el('my-ti').textContent = myPlayer.titanium;
-    el('my-fighters').textContent = myPlayer.fighters;
-    el('my-canons').textContent = myPlayer.canons;
+  // Role-specific enable/disable
+  const isPureHost = state.isHost && !state.myRole;
+  const isWar = state.myRole === 'war';
+  const isNeg = state.myRole === 'negotiator';
+  const isBuilder = state.myRole === 'builder';
 
-    const pct = myPlayer.factoryPercent || 0;
-    el('my-hp-fill').style.width = pct + '%';
-    el('my-hp-text').textContent = `${myPlayer.factoryHP} / 100`;
+  const canControl = !isPureHost; // pure host can never control
 
-    if (isEliminated) {
-      show('eliminated-banner');
-      el('my-hp-fill').style.background = '#440000';
-    } else {
-      hide('eliminated-banner');
-    }
+  // War section
+  el('btn-attack').disabled = !(canControl && isWar);
+  el('attack-target').disabled = !(canControl && isWar);
+  el('attack-num').disabled = !(canControl && isWar);
+  if (isWar && !isPureHost) hide('attack-disabled'); else show('attack-disabled');
+
+  // Negotiator section
+  const tradeBtns = document.querySelectorAll('#neg-section .btn');
+  tradeBtns.forEach(b => b.disabled = !(canControl && isNeg));
+  el('trade-target').disabled = !(canControl && isNeg);
+  if (isNeg && !isPureHost) hide('trade-disabled'); else show('trade-disabled');
+
+  // Builder section
+  const buildBtns = document.querySelectorAll('#builder-section .btn');
+  buildBtns.forEach(b => b.disabled = !(canControl && isBuilder));
+  if (isBuilder && !isPureHost) hide('build-disabled'); else show('build-disabled');
+
+  // Extra note for pure host
+  if (isPureHost) {
+    document.querySelectorAll('.disabled-note').forEach(el => el.textContent = 'View only — you are the Host (no role)');
   }
 
-  // Other players
-  renderOtherPlayers(state.players, myPlayerName);
+  // Find my team data
+  const myTeamData = state.teams.find(t => t.name === state.myTeam) || {};
 
-  // Build queue
-  renderBuildQueue(state, myPlayerName);
+  // War panel numbers
+  el('war-fighters').textContent = myTeamData.fighters || 0;
 
-  // Attack / Trade dropdowns
-  populateActionTargets(state.players, myPlayerName);
+  // Negotiator numbers
+  el('neg-ti').textContent = myTeamData.titanium || 0;
+
+  // Builder numbers
+  el('build-miners').textContent = myTeamData.miners || 0;
+  el('build-income').textContent = `+${myTeamData.incomePerCycle || 5} Ti`;
+
+  // Other teams (for trading + attack targets)
+  renderOtherTeams(state.teams, state.myTeam);
+
+  // Populate selects
+  populateActionTargets(state.teams, state.myTeam);
 
   // Fleets
   renderFleets(state.fleets);
 
-  // Event log (only append new lines)
+  // Build queue (per my team)
+  renderBuildQueue(state, state.myTeam);
+
+  // Event log
   renderEventLog(state.eventLog);
 }
 
 function renderLobby(state) {
-  const container = el('lobby-players');
+  const container = el('lobby-teams');
   container.innerHTML = '';
 
-  const names = state.players.map(p => p.name);
-  const div = document.createElement('div');
-  div.style.fontSize = '18px';
-  div.style.lineHeight = '1.6';
-  div.innerHTML = names.length
-    ? 'PLAYERS CONNECTED:<br>' + names.map(n => '• ' + n).join('<br>')
-    : 'No players have joined yet.';
-  container.appendChild(div);
+  const teams = state.teams || [];
+
+  if (state.isHost && !state.myRole) {
+    // Pure host view
+    const info = document.createElement('div');
+    info.style.cssText = 'background:#112200; padding:8px; margin-bottom:8px; border:1px solid #334400;';
+    info.innerHTML = `<strong>You are the HOST (Teacher)</strong><br>
+      Give students this code: <span style="font-size:18px; letter-spacing:3px; color:#ffcc33;">${state.code}</span><br>
+      Students join using the code + a team name. You do not belong to any team.`;
+    container.appendChild(info);
+  }
+
+  if (teams.length === 0) {
+    const msg = document.createElement('div');
+    msg.style.color = '#006633';
+    msg.textContent = state.isHost 
+      ? 'No teams have formed yet. Tell students the code above.'
+      : 'No teams have joined yet.';
+    container.appendChild(msg);
+  } else {
+    teams.forEach(t => {
+      const div = document.createElement('div');
+      div.style.cssText = 'margin:4px 0; padding:4px 8px; border:1px solid #003322;';
+      const members = (t.members || []).map(m => `${m.name} (${m.label})`).join(' • ');
+      div.innerHTML = `<strong>${t.name}</strong> — ${t.members ? t.members.length : 0}/3 players<br><span style="font-size:11px;color:#006633;">${members || 'Waiting for players...'}</span>`;
+      container.appendChild(div);
+    });
+  }
 
   const startBtn = el('btn-start');
-  startBtn.disabled = names.length < 2 || !state.isHost;
+  const fullTeams = teams.filter(t => (t.members || []).length === 3).length;
+  startBtn.disabled = fullTeams < 2 || !state.isHost;
+
+  // Show note for non-hosts
+  const note = el('lobby-host-note');
+  if (note) {
+    if (state.isHost) hide('lobby-host-note'); else show('lobby-host-note');
+  }
 }
 
-function renderOtherPlayers(players, myName) {
-  const container = el('other-players');
+function renderOtherTeams(teams, myTeamName) {
+  const container = el('other-teams');
   container.innerHTML = '';
 
-  const others = players.filter(p => p.name !== myName);
+  const others = teams.filter(t => t.name !== myTeamName);
 
   if (others.length === 0) {
     const div = document.createElement('div');
-    div.textContent = 'Waiting for other players...';
     div.style.color = '#006633';
+    div.textContent = 'No other teams yet.';
     container.appendChild(div);
     return;
   }
 
-  others.forEach(p => {
+  others.forEach(t => {
     const card = document.createElement('div');
-    card.className = 'player-card' + (p.factoryHP <= 0 ? ' dead' : '');
-
-    const hpPct = p.factoryPercent || 0;
+    card.className = 'team-card' + (t.factoryHP <= 0 ? ' dead' : '');
     card.innerHTML = `
-      <div class="player-name">${p.name}</div>
-      <div class="stat-row"><span>Ti</span><span>${p.titanium}</span></div>
-      <div class="stat-row"><span>Fighters</span><span>${p.fighters}</span></div>
-      <div class="stat-row"><span>Canons</span><span>${p.canons}</span></div>
-      <div style="margin-top:6px;">
-        <div style="height:10px;background:#220000;border:1px solid #440000;">
-          <div style="height:100%;width:${hpPct}%;background:${p.factoryHP>0?'#ff3366':'#440000'};"></div>
+      <div class="team-name">${t.name}</div>
+      <div class="stat-row"><span>Ti</span><span>${t.titanium}</span></div>
+      <div class="stat-row"><span>Miners</span><span>${t.miners}</span></div>
+      <div class="stat-row"><span>FTR / DCN</span><span>${t.fighters} / ${t.canons}</span></div>
+      <div style="margin-top:3px;">
+        <div style="height:8px;background:#220000;border:1px solid #440000;">
+          <div style="height:100%;width:${t.factoryPercent}%;background:${t.factoryHP>0?'#ff3366':'#440000'};"></div>
         </div>
-        <div style="font-size:10px;text-align:right;">${p.factoryHP} HP</div>
       </div>
     `;
     container.appendChild(card);
   });
 }
 
-function renderBuildQueue(state, myName) {
-  const container = el('build-status');
-  const myBuild = state.builds[myName];
-  if (!myBuild) {
-    container.innerHTML = '<span style="color:#006633">No build data</span>';
-    return;
-  }
+function populateActionTargets(teams, myTeamName) {
+  const aliveOthers = teams.filter(t => t.name !== myTeamName && t.factoryHP > 0);
 
-  let html = '';
-  if (myBuild.current) {
-    html += `<strong>BUILDING:</strong> ${myBuild.current.type.toUpperCase()} — ${myBuild.current.remaining}s left<br>`;
-  } else {
-    html += `<span style="color:#006633">Factory idle</span><br>`;
-  }
-  if (myBuild.queue.length > 0) {
-    html += `<strong>QUEUED:</strong> ` + myBuild.queue.map(t => t.toUpperCase()).join(' → ');
-  } else {
-    html += `<span style="color:#006633">Queue empty</span>`;
-  }
-  container.innerHTML = html;
-}
-
-function populateActionTargets(players, myName) {
-  const aliveOthers = players.filter(p => p.name !== myName && p.factoryHP > 0);
-
-  // Attack
+  // Attack target
   const atkSel = el('attack-target');
   const prevAtk = atkSel.value;
   atkSel.innerHTML = '';
@@ -685,16 +723,16 @@ function populateActionTargets(players, myName) {
     atkSel.disabled = true;
   } else {
     atkSel.disabled = false;
-    aliveOthers.forEach(p => {
+    aliveOthers.forEach(t => {
       const opt = document.createElement('option');
-      opt.value = p.name;
-      opt.textContent = p.name;
+      opt.value = t.name;
+      opt.textContent = t.name;
       atkSel.appendChild(opt);
     });
-    if (prevAtk && aliveOthers.find(p => p.name === prevAtk)) atkSel.value = prevAtk;
+    if (prevAtk && aliveOthers.find(t => t.name === prevAtk)) atkSel.value = prevAtk;
   }
 
-  // Trade (can send to anyone alive including eliminated? No — only living)
+  // Trade target
   const trSel = el('trade-target');
   const prevTr = trSel.value;
   trSel.innerHTML = '';
@@ -705,13 +743,13 @@ function populateActionTargets(players, myName) {
     trSel.disabled = true;
   } else {
     trSel.disabled = false;
-    aliveOthers.forEach(p => {
+    aliveOthers.forEach(t => {
       const opt = document.createElement('option');
-      opt.value = p.name;
-      opt.textContent = p.name;
+      opt.value = t.name;
+      opt.textContent = t.name;
       trSel.appendChild(opt);
     });
-    if (prevTr && aliveOthers.find(p => p.name === prevTr)) trSel.value = prevTr;
+    if (prevTr && aliveOthers.find(t => t.name === prevTr)) trSel.value = prevTr;
   }
 }
 
@@ -726,16 +764,37 @@ function renderFleets(fleets) {
   ).join('<br>');
 }
 
+function renderBuildQueue(state, myTeamName) {
+  const container = el('build-status');
+  const myBuild = state.builds && state.builds[myTeamName];
+  if (!myBuild) {
+    container.innerHTML = '<span style="color:#006633">No build data</span>';
+    return;
+  }
+
+  let html = '';
+  if (myBuild.current) {
+    html += `<strong>BUILDING:</strong> ${myBuild.current.type.toUpperCase()} — ${myBuild.current.remaining}s left<br>`;
+  } else {
+    html += `<span style="color:#006633">Factory idle</span><br>`;
+  }
+  if (myBuild.queue && myBuild.queue.length > 0) {
+    html += `<strong>QUEUED:</strong> ` + myBuild.queue.map(t => t.toUpperCase()).join(' → ');
+  } else {
+    html += `<span style="color:#006633">Queue empty</span>`;
+  }
+  container.innerHTML = html;
+}
+
 function renderEventLog(logLines) {
   const log = el('event-log');
-  // Simple approach: clear and re-render last lines (cheap)
   log.innerHTML = '';
-  logLines.forEach(line => {
+  (logLines || []).forEach(line => {
     const div = document.createElement('div');
     div.className = 'log-line';
     if (line.includes('DESTROYED') || line.includes('attacked')) div.classList.add('log-attack');
-    else if (line.includes('completed') || line.includes('transferred')) div.classList.add('log-good');
-    else if (line.includes('STARTED') || line.includes('Mining')) div.classList.add('log-system');
+    else if (line.includes('completed') || line.includes('transferred') || line.includes('queued')) div.classList.add('log-good');
+    else if (line.includes('STARTED') || line.includes('Mining') || line.includes('cycle')) div.classList.add('log-system');
     div.textContent = line;
     log.appendChild(div);
   });
@@ -748,6 +807,9 @@ socket.on('connect', () => {
 });
 
 socket.on('gameUpdate', (state) => {
+  // Remember our identity across updates
+  if (state.myRole && !myRole) myRole = state.myRole;
+  if (state.myTeam && !myTeamName) myTeamName = state.myTeam;
   render(state);
 });
 
@@ -756,7 +818,7 @@ socket.on('disconnect', () => {
   if (status) status.textContent = 'DISCONNECTED — REFRESH TO REJOIN';
 });
 
-// Keyboard shortcuts for power users / teacher demo
+// Keyboard shortcut
 document.addEventListener('keydown', (e) => {
   if (e.key === '/' && document.activeElement.tagName === 'BODY') {
     e.preventDefault();
@@ -771,7 +833,7 @@ setTimeout(() => {
   if (codeInput) codeInput.focus();
 }, 400);
 
-console.log('%c[STARFIGHT] Terminal client ready', 'color:#006633');
+console.log('%c[STAR POINT] Team-based client ready', 'color:#006633');
 </script>
 </body>
 </html>
