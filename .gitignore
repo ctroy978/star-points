@@ -138,3 +138,11 @@ Thumbs.db
 *.bak
 *.tmp
 *.temp
+
+# SQLite runtime database (classroom game persistence)
+starpoint.db
+starpoint.db-shm
+starpoint.db-wal
+*.db
+*.db-shm
+*.db-wal

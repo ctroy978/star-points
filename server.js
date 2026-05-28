@@ -3,6 +3,7 @@ const http = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
 const os = require('os');
+const db = require('./db');
 
 const app = express();
 const server = http.createServer(app);
@@ -12,17 +13,35 @@ const io = new Server(server, {
 
 const PORT = process.env.PORT || 3000;
 
+// ============ DB INIT (persistence for classroom restarts) ============
+db.initDb();
+
+// Load any previously saved games from disk so state survives between class periods
+const savedGames = db.loadAllGames();
+console.log(`[DB] Loaded ${savedGames.length} saved game(s) from disk`);
+
 // ============ GAME CONSTANTS (easy to tweak for class) ============
-const MAX_PLAYERS = 4;
-const START_TITANIUM = 100;
+const MAX_TEAMS = 4;
+const TEAM_SIZE = 3;                    // exactly 3 roles per team
+const ROLE_ORDER = ['war', 'negotiator', 'builder'];
+const ROLE_LABELS = {
+  war: 'War Commander',
+  negotiator: 'Negotiator',
+  builder: 'Builder'
+};
+
+const START_TITANIUM = 120;
 const START_FACTORY_HP = 100;
 
+const MINER_COST = 30;
+const MINER_TIME = 45;      // seconds - produces passive income
 const FIGHTER_COST = 20;
-const FIGHTER_TIME = 30;   // seconds
+const FIGHTER_TIME = 30;
 const CANON_COST = 10;
 const CANON_TIME = 60;
 
-const PASSIVE_INCOME = 4;
+const BASE_PASSIVE = 5;
+const MINER_PASSIVE = 3;    // +3 Ti per miner every cycle
 const PASSIVE_INTERVAL_TICKS = 15;   // every 15 seconds
 
 const TRAVEL_TIME = 8;               // seconds for fleets
@@ -34,6 +53,9 @@ const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no confusing chars
 // ============ IN-MEMORY STATE ============
 const games = new Map(); // code -> Game
 
+// Helper: socketId -> { game, teamName, playerName, role }
+const socketToPlayer = new Map();
+
 function generateCode() {
   let code = '';
   for (let i = 0; i < 4; i++) {
@@ -42,14 +64,38 @@ function generateCode() {
   return code;
 }
 
+// Team data structure (shared resources + 3 role players)
+class Team {
+  constructor(name) {
+    this.name = name;
+    this.titanium = START_TITANIUM;
+    this.miners = 0;
+    this.fighters = 0;
+    this.canons = 0;
+    this.factoryHP = START_FACTORY_HP;
+    this.players = new Map(); // playerName -> { name, role, socketId }
+    this.buildQueue = [];
+    this.currentBuild = null; // { type, remaining }
+  }
+
+  getRolePlayer(role) {
+    for (const p of this.players.values()) {
+      if (p.role === role) return p;
+    }
+    return null;
+  }
+
+  isFull() {
+    return this.players.size >= TEAM_SIZE;
+  }
+}
+
 class Game {
   constructor(code, hostSocketId) {
     this.code = code;
     this.hostSocketId = hostSocketId;
     this.status = 'waiting';           // waiting | running | ended
-    this.players = new Map();          // name -> Player
-    this.buildQueues = new Map();      // name -> string[]
-    this.currentBuilds = new Map();    // name -> {type, remaining}
+    this.teams = new Map();            // teamName -> Team
     this.fleets = [];                  // in-transit
     this.eventLog = [];
     this.tickCounter = 0;
@@ -57,35 +103,55 @@ class Game {
     this.winner = null;
   }
 
-  addPlayer(name, socketId) {
-    if (this.players.has(name)) {
-      // Rejoin existing player (same name)
-      const p = this.players.get(name);
+  // Create a new team or return existing
+  getOrCreateTeam(teamName) {
+    if (!this.teams.has(teamName)) {
+      const team = new Team(teamName);
+      this.teams.set(teamName, team);
+      return team;
+    }
+    return this.teams.get(teamName);
+  }
+
+  // Add player to a team and assign next available role
+  addPlayerToTeam(teamName, playerName, socketId) {
+    const team = this.getOrCreateTeam(teamName);
+
+    // Rejoin: same player name on same team keeps their role
+    if (team.players.has(playerName)) {
+      const p = team.players.get(playerName);
       p.socketId = socketId;
-      return p;
+      socketToPlayer.set(socketId, { game: this, teamName, playerName, role: p.role });
+      return { team, player: p, isNew: false };
     }
-    if (this.players.size >= MAX_PLAYERS) {
-      throw new Error('Game is full');
+
+    if (team.isFull()) {
+      throw new Error(`Team "${teamName}" is full (3 players)`);
     }
-    const player = {
-      name,
-      titanium: START_TITANIUM,
-      fighters: 0,
-      canons: 0,
-      factoryHP: START_FACTORY_HP,
-      socketId
-    };
-    this.players.set(name, player);
-    this.buildQueues.set(name, []);
-    this.currentBuilds.set(name, null);
-    return player;
+    if (this.teams.size > MAX_TEAMS && !this.teams.has(teamName)) {
+      throw new Error('Maximum number of teams reached');
+    }
+
+    // Assign next role in order
+    const usedRoles = new Set(Array.from(team.players.values()).map(p => p.role));
+    let assignedRole = null;
+    for (const r of ROLE_ORDER) {
+      if (!usedRoles.has(r)) {
+        assignedRole = r;
+        break;
+      }
+    }
+    if (!assignedRole) assignedRole = 'war'; // fallback (shouldn't happen)
+
+    const player = { name: playerName, role: assignedRole, socketId };
+    team.players.set(playerName, player);
+    socketToPlayer.set(socketId, { game: this, teamName, playerName, role: assignedRole });
+
+    return { team, player, isNew: true, assignedRole };
   }
 
   getPlayerBySocket(socketId) {
-    for (const p of this.players.values()) {
-      if (p.socketId === socketId) return p;
-    }
-    return null;
+    return socketToPlayer.get(socketId) || null;
   }
 
   isHost(socketId) {
@@ -94,7 +160,94 @@ class Game {
 
   addEvent(text) {
     this.eventLog.push(text);
-    if (this.eventLog.length > 18) this.eventLog.shift();
+    if (this.eventLog.length > 20) this.eventLog.shift();
+  }
+
+  getTeamByName(name) {
+    return this.teams.get(name) || null;
+  }
+
+  getAliveTeams() {
+    return Array.from(this.teams.values()).filter(t => t.factoryHP > 0);
+  }
+}
+
+// ============ PERSISTENCE HELPERS ============
+
+function persistGameState(game) {
+  try {
+    db.saveGame(game.code, game.status, game.winner);
+
+    for (const team of game.teams.values()) {
+      db.upsertTeam(game.code, team.name, {
+        titanium: team.titanium,
+        miners: team.miners,
+        fighters: team.fighters,
+        canons: team.canons,
+        factoryHP: team.factoryHP
+      });
+
+      for (const p of team.players.values()) {
+        db.addOrUpdatePlayer(game.code, team.name, p.name, p.role);
+      }
+    }
+
+    // Replace fleets for this game (simple approach)
+    db.clearFleetsForGame(game.code);
+    for (const f of game.fleets) {
+      db.addFleet(game.code, f.from, f.to, f.fighters, f.arrivalTime);
+    }
+  } catch (e) {
+    console.error('[DB] Persist error:', e.message);
+  }
+}
+
+function hydrateSavedGame(saved) {
+  const game = new Game(saved.code, null); // hostSocketId will be set on first reconnect
+  game.status = saved.status;
+  game.winner = saved.winner || null;
+
+  // Rebuild teams
+  for (const t of saved.teams) {
+    const team = new Team(t.name);
+    team.titanium = t.titanium;
+    team.miners = t.miners;
+    team.fighters = t.fighters;
+    team.canons = t.canons;
+    team.factoryHP = t.factoryHP;
+    game.teams.set(t.name, team);
+  }
+
+  // Rebuild player role assignments (no sockets yet)
+  for (const p of saved.players) {
+    const team = game.teams.get(p.teamName);
+    if (team) {
+      team.players.set(p.name, {
+        name: p.name,
+        role: p.role,
+        socketId: null
+      });
+    }
+  }
+
+  // Rebuild fleets
+  game.fleets = saved.fleets.map(f => ({
+    id: Date.now() + Math.random(),
+    from: f.from,
+    to: f.to,
+    fighters: f.fighters,
+    arrivalTime: f.arrivalTime
+  }));
+
+  return game;
+}
+
+// Hydrate any games that were saved from previous runs
+for (const saved of savedGames) {
+  if (saved.status !== 'ended') {
+    const game = hydrateSavedGame(saved);
+    games.set(saved.code, game);
+    console.log(`[DB] Restored game ${saved.code} with ${game.teams.size} team(s)`);
   }
 }
 
@@ -108,7 +261,7 @@ setInterval(() => {
     processBuilds(game);
     processFleets(game);
 
-    // Passive mining
+    // Passive mining (now benefits from miners)
     if ((game.tickCounter - game.lastIncomeTick) >= PASSIVE_INTERVAL_TICKS) {
       givePassiveIncome(game);
       game.lastIncomeTick = game.tickCounter;
@@ -116,33 +269,118 @@ setInterval(() => {
 
     checkWinCondition(game);
 
-    // Broadcast fresh state to everyone in the room
+    // Broadcast + persist
     broadcastState(game);
+    persistGameState(game);
   }
 }, 1000);
 
-function processBuilds(game) {
-  for (const [name, player] of game.players) {
-    let current = game.currentBuilds.get(name);
+// Broadcast full state to all players + the host (pure host has no role)
+function broadcastState(game) {
+  // Build sanitized teams list (what everyone sees)
+  const teams = [];
+  for (const t of game.teams.values()) {
+    const members = Array.from(t.players.values()).map(p => ({
+      name: p.name,
+      role: p.role,
+      label: ROLE_LABELS[p.role]
+    }));
 
-    if (!current && game.buildQueues.get(name).length > 0) {
-      // Start next item
-      const nextType = game.buildQueues.get(name).shift();
-      const time = (nextType === 'fighter') ? FIGHTER_TIME : CANON_TIME;
+    teams.push({
+      name: t.name,
+      titanium: t.titanium,
+      miners: t.miners,
+      fighters: t.fighters,
+      canons: t.canons,
+      factoryHP: t.factoryHP,
+      factoryPercent: Math.round((t.factoryHP / START_FACTORY_HP) * 100),
+      members,
+      incomePerCycle: BASE_PASSIVE + (t.miners * MINER_PASSIVE)
+    });
+  }
+
+  // Fleets with ETAs
+  const fleets = game.fleets.map(f => ({
+    from: f.from,
+    to: f.to,
+    fighters: f.fighters,
+    eta: Math.max(1, Math.ceil((f.arrivalTime - Date.now()) / 1000))
+  }));
+
+  // Build status per team
+  const builds = {};
+  for (const [name, team] of game.teams) {
+    builds[name] = {
+      queue: [...team.buildQueue],
+      current: team.currentBuild
+    };
+  }
+
+  const basePayload = {
+    code: game.code,
+    status: game.status,
+    teams,
+    fleets,
+    builds,
+    eventLog: [...game.eventLog],
+    winner: game.winner
+  };
+
+  // Send to regular players (they have role + team)
+  for (const [socketId, info] of socketToPlayer) {
+    if (info.game.code !== game.code) continue;
+
+    const payload = {
+      ...basePayload,
+      myTeam: info.teamName,
+      myRole: info.role,
+      myRoleLabel: ROLE_LABELS[info.role],
+      isHost: game.hostSocketId === socketId
+    };
+    io.to(socketId).emit('gameUpdate', payload);
+  }
+
+  // Explicitly send to the pure host (if they are not also in socketToPlayer)
+  if (game.hostSocketId && !socketToPlayer.has(game.hostSocketId)) {
+    const hostPayload = {
+      ...basePayload,
+      myTeam: null,
+      myRole: null,
+      myRoleLabel: null,
+      isHost: true
+    };
+    io.to(game.hostSocketId).emit('gameUpdate', hostPayload);
+  }
+}
+
+function processBuilds(game) {
+  for (const team of game.teams.values()) {
+    if (team.factoryHP <= 0) continue;
+
+    let current = team.currentBuild;
+
+    if (!current && team.buildQueue.length > 0) {
+      const nextType = team.buildQueue.shift();
+      let time;
+      if (nextType === 'miner') time = MINER_TIME;
+      else if (nextType === 'fighter') time = FIGHTER_TIME;
+      else time = CANON_TIME;
+
       current = { type: nextType, remaining: time };
-      game.currentBuilds.set(name, current);
-      game.addEvent(`${name} started building ${nextType.toUpperCase()}`);
+      team.currentBuild = current;
+      game.addEvent(`[${team.name}] Builder started ${nextType.toUpperCase()}`);
     }
 
     if (current) {
       current.remaining--;
       if (current.remaining <= 0) {
-        // Complete
-        if (current.type === 'fighter') player.fighters++;
-        else player.canons++;
+        // Complete build
+        if (current.type === 'miner') team.miners++;
+        else if (current.type === 'fighter') team.fighters++;
+        else team.canons++;
 
-        game.addEvent(`${name} completed 1 ${current.type.toUpperCase()}`);
-        game.currentBuilds.set(name, null);
+        game.addEvent(`[${team.name}] completed 1 ${current.type.toUpperCase()}`);
+        team.currentBuild = null;
       }
     }
   }
@@ -163,36 +401,32 @@ function processFleets(game) {
 }
 
 function resolveCombat(game, fleet) {
-  const attacker = game.players.get(fleet.from);
-  const defender = game.players.get(fleet.to);
+  const attackerTeam = game.getTeamByName(fleet.from);
+  const defenderTeam = game.getTeamByName(fleet.to);
 
   const originalCount = fleet.fighters;
 
-  if (!defender || defender.factoryHP <= 0) {
-    // Target already destroyed — the whole fleet returns home safely
-    if (attacker && attacker.factoryHP > 0) {
-      attacker.fighters += originalCount;
+  if (!defenderTeam || defenderTeam.factoryHP <= 0) {
+    if (attackerTeam && attackerTeam.factoryHP > 0) {
+      attackerTeam.fighters += originalCount;
     }
     game.addEvent(`Fleet from ${fleet.from} returned safely (${fleet.to} already destroyed)`);
     return;
   }
 
-  const canons = defender.canons || 0;
+  const canons = defenderTeam.canons || 0;
   const killed = Math.min(originalCount, canons);
   const survivors = originalCount - killed;
   const damage = survivors * FIGHTER_DAMAGE;
 
-  defender.factoryHP = Math.max(0, defender.factoryHP - damage);
+  defenderTeam.factoryHP = Math.max(0, defenderTeam.factoryHP - damage);
 
   let msg = `${fleet.from} attacked ${fleet.to} with ${originalCount} FTR. `;
-  if (killed > 0) {
-    msg += `${killed} shot down. `;
-  }
+  if (killed > 0) msg += `${killed} shot down. `;
   if (survivors > 0) {
     msg += `${survivors} hit for ${damage} damage`;
-    // Survivors fly home and can be used again
-    if (attacker && attacker.factoryHP > 0) {
-      attacker.fighters += survivors;
+    if (attackerTeam && attackerTeam.factoryHP > 0) {
+      attackerTeam.fighters += survivors;
       msg += ` — ${survivors} returned.`;
     } else {
       msg += ` (attacker eliminated, survivors lost).`;
@@ -200,258 +434,269 @@ function resolveCombat(game, fleet) {
   } else {
     msg += `All destroyed, no damage.`;
   }
-
   game.addEvent(msg);
 
-  // Killing blow bonus (only if attacker is still alive)
-  if (defender.factoryHP <= 0 && attacker && attacker.factoryHP > 0) {
-    attacker.titanium += 20;
-    game.addEvent(`${fleet.from} DESTROYED ${fleet.to}'s factory! (+20 Ti bonus)`);
+  // Killing blow bonus
+  if (defenderTeam.factoryHP <= 0 && attackerTeam && attackerTeam.factoryHP > 0) {
+    attackerTeam.titanium += 25;
+    game.addEvent(`${fleet.from} DESTROYED ${fleet.to}'s factory! (+25 Ti bonus)`);
   }
 }
 
 function givePassiveIncome(game) {
-  for (const player of game.players.values()) {
-    if (player.factoryHP > 0) {
-      player.titanium += PASSIVE_INCOME;
+  for (const team of game.teams.values()) {
+    if (team.factoryHP > 0) {
+      const income = BASE_PASSIVE + (team.miners * MINER_PASSIVE);
+      team.titanium += income;
     }
   }
-  game.addEvent(`Mining cycle complete — everyone +${PASSIVE_INCOME} Ti`);
+  game.addEvent(`Mining cycle complete — all teams received passive income`);
 }
 
 function checkWinCondition(game) {
-  const alive = [];
-  for (const p of game.players.values()) {
-    if (p.factoryHP > 0) alive.push(p.name);
-  }
+  const alive = game.getAliveTeams();
 
   if (alive.length <= 1 && game.status === 'running') {
     game.status = 'ended';
     if (alive.length === 1) {
-      game.winner = alive[0];
+      game.winner = alive[0].name;
       game.addEvent(`GAME OVER — ${game.winner} WINS!`);
     } else {
-      game.addEvent(`GAME OVER — all factories destroyed.`);
+      game.addEvent(`GAME OVER — all teams eliminated.`);
     }
+    persistGameState(game);
   }
 }
 
-function broadcastState(game) {
-  const players = [];
-  for (const p of game.players.values()) {
-    players.push({
-      name: p.name,
-      titanium: p.titanium,
-      fighters: p.fighters,
-      canons: p.canons,
-      factoryHP: p.factoryHP,
-      factoryPercent: Math.round((p.factoryHP / START_FACTORY_HP) * 100)
-    });
-  }
-
-  // Sanitized fleets (no secret info)
-  const fleets = game.fleets.map(f => ({
-    from: f.from,
-    to: f.to,
-    fighters: f.fighters,
-    eta: Math.max(1, Math.ceil((f.arrivalTime - Date.now()) / 1000))
-  }));
-
-  // Build status per player
-  const builds = {};
-  for (const [name, q] of game.buildQueues) {
-    builds[name] = {
-      queue: [...q],
-      current: game.currentBuilds.get(name)
-    };
-  }
-
-  const payload = {
-    code: game.code,
-    status: game.status,
-    isHost: false, // filled per socket below
-    players,
-    fleets,
-    builds,
-    eventLog: [...game.eventLog],
-    winner: game.winner
-  };
-
-  // Send to each player with correct isHost flag
-  for (const [name, player] of game.players) {
-    if (player.socketId) {
-      const personal = { ...payload, isHost: game.hostSocketId === player.socketId };
-      io.to(player.socketId).emit('gameUpdate', personal);
-    }
-  }
-}
-
-// ============ SOCKET HANDLERS ============
+// ============ SOCKET HANDLERS (Team + Role based) ============
 io.on('connection', (socket) => {
   console.log('Client connected:', socket.id);
 
-  socket.on('createGame', (data, cb) => {
+  // Host (teacher) creates a new game session — host does NOT join any team
+  socket.on('createGame', ({ hostName }, cb) => {
     let code;
     do { code = generateCode(); } while (games.has(code));
 
     const game = new Game(code, socket.id);
+    game.hostName = (hostName || '').trim().slice(0, 20) || 'Teacher';
+
     games.set(code, game);
+    socket.join(code);
 
-    // Auto-join the creator as the first player (fixes "not in game" on start)
-    const rawName = (data && data.playerName) ? data.playerName : '';
-    const name = rawName.trim().slice(0, 14) || 'Teacher';
-    try {
-      game.addPlayer(name, socket.id);
-      socket.join(code);
-      game.addEvent(`${name} (host) joined the system`);
-    } catch (e) {
-      // Should never happen on fresh game
-    }
+    game.addEvent(`Host created session (${game.hostName})`);
+    persistGameState(game);
 
-    console.log(`Game created: ${code} by ${socket.id} (host: ${name})`);
-
-    cb({ ok: true, code, playerName: name, isHost: true });
+    console.log(`Game created: ${code} by host (${game.hostName})`);
+    cb({ ok: true, code, isHost: true, hostName: game.hostName });
   });
 
-  socket.on('joinGame', ({ code, playerName }, cb) => {
+  // Teacher reclaims host status on refresh (using the code)
+  socket.on('reclaimAsHost', ({ code }, cb) => {
     const game = games.get(code);
     if (!game) return cb({ ok: false, error: 'Invalid code' });
     if (game.status === 'ended') return cb({ ok: false, error: 'Game already ended' });
 
-    const name = playerName.trim().slice(0, 14);
-    if (!name) return cb({ ok: false, error: 'Name required' });
+    // Rebind as host
+    game.hostSocketId = socket.id;
+    socket.join(code);
+
+    console.log(`Host reclaimed session ${code}`);
+    cb({ ok: true, code, isHost: true, hostName: game.hostName || 'Teacher' });
+
+    // Send current state to the reconnected host
+    broadcastState(game);
+  });
+
+  // Player joins an existing game + team (role auto-assigned)
+  socket.on('joinGame', ({ code, teamName, playerName }, cb) => {
+    const game = games.get(code);
+    if (!game) return cb({ ok: false, error: 'Invalid code' });
+    if (game.status === 'ended') return cb({ ok: false, error: 'Game already ended' });
+
+    const tName = (teamName || '').trim().slice(0, 16);
+    const pName = (playerName || '').trim().slice(0, 14);
+
+    if (!tName || !pName) return cb({ ok: false, error: 'Team name and player name required' });
 
     try {
-      const player = game.addPlayer(name, socket.id);
+      const result = game.addPlayerToTeam(tName, pName, socket.id);
       socket.join(code);
 
-      game.addEvent(`${name} joined the system`);
+      const roleLabel = ROLE_LABELS[result.player.role];
+      if (result.isNew) {
+        game.addEvent(`[${tName}] ${pName} joined as ${roleLabel}`);
+      } else {
+        game.addEvent(`[${tName}] ${pName} reconnected as ${roleLabel}`);
+      }
 
-      cb({ ok: true, code, playerName: name, isHost: game.isHost(socket.id) });
-
-      // Tell everyone
+      persistGameState(game);
       broadcastState(game);
+
+      cb({
+        ok: true,
+        code,
+        teamName: tName,
+        playerName: pName,
+        role: result.player.role,
+        roleLabel,
+        isHost: game.isHost(socket.id)
+      });
     } catch (e) {
       cb({ ok: false, error: e.message });
     }
   });
 
   socket.on('startGame', (cb) => {
-    const game = findGameBySocket(socket.id);
+    // Support both pure host and (legacy) player who happens to be host
+    let game = null;
+    const info = socketToPlayer.get(socket.id);
+    if (info) {
+      game = info.game;
+    } else {
+      // Check if this socket is the registered host
+      for (const g of games.values()) {
+        if (g.hostSocketId === socket.id) {
+          game = g;
+          break;
+        }
+      }
+    }
     if (!game) return cb?.({ ok: false, error: 'Not in a game' });
     if (!game.isHost(socket.id)) return cb?.({ ok: false, error: 'Only host can start' });
-    if (game.players.size < 2) return cb?.({ ok: false, error: 'Need at least 2 players' });
+
+    const completeTeams = Array.from(game.teams.values()).filter(t => t.players.size === TEAM_SIZE);
+    if (completeTeams.length < 2) {
+      return cb?.({ ok: false, error: 'Need at least 2 full teams (3 players each)' });
+    }
 
     game.status = 'running';
-    game.addEvent('GAME STARTED — Build fleets and survive!');
+    game.addEvent('GAME STARTED — Coordinate with your team! Builder produces, Negotiator trades, War Commander attacks.');
+    persistGameState(game);
     broadcastState(game);
     cb?.({ ok: true });
   });
 
+  // Builder-only action
   socket.on('queueBuild', ({ type }, cb) => {
-    const game = findGameBySocket(socket.id);
-    if (!game || game.status !== 'running') return cb?.({ ok: false });
+    const info = socketToPlayer.get(socket.id);
+    if (!info || info.role !== 'builder') return cb?.({ ok: false, error: 'Only the Builder can queue production' });
 
-    const player = game.getPlayerBySocket(socket.id);
-    if (!player || player.factoryHP <= 0) return cb?.({ ok: false });
+    const game = info.game;
+    if (game.status !== 'running') return cb?.({ ok: false });
 
-    const cost = (type === 'fighter') ? FIGHTER_COST : CANON_COST;
-    if (player.titanium < cost) {
-      return cb?.({ ok: false, error: 'Not enough titanium' });
-    }
+    const team = game.getTeamByName(info.teamName);
+    if (!team || team.factoryHP <= 0) return cb?.({ ok: false });
 
-    const queue = game.buildQueues.get(player.name);
-    if (queue.length >= MAX_QUEUE) {
-      return cb?.({ ok: false, error: 'Queue full' });
-    }
+    const cost = (type === 'miner') ? MINER_COST : (type === 'fighter') ? FIGHTER_COST : CANON_COST;
+    if (team.titanium < cost) return cb?.({ ok: false, error: 'Not enough titanium' });
+    if (team.buildQueue.length >= MAX_QUEUE) return cb?.({ ok: false, error: 'Queue full (max 4)' });
 
-    player.titanium -= cost;
-    queue.push(type);
+    team.titanium -= cost;
+    team.buildQueue.push(type);
 
-    game.addEvent(`${player.name} queued 1 ${type.toUpperCase()}`);
+    game.addEvent(`[${info.teamName}] Builder queued 1 ${type.toUpperCase()}`);
+    persistGameState(game);
     broadcastState(game);
     cb?.({ ok: true });
   });
 
-  socket.on('launchAttack', ({ targetName, numFighters }, cb) => {
-    const game = findGameBySocket(socket.id);
-    if (!game || game.status !== 'running') return cb?.({ ok: false });
+  // War Commander-only action
+  socket.on('launchAttack', ({ targetTeam, numFighters }, cb) => {
+    const info = socketToPlayer.get(socket.id);
+    if (!info || info.role !== 'war') return cb?.({ ok: false, error: 'Only the War Commander can launch attacks' });
 
-    const attacker = game.getPlayerBySocket(socket.id);
-    const defender = game.players.get(targetName);
+    const game = info.game;
+    if (game.status !== 'running') return cb?.({ ok: false });
+
+    const attacker = game.getTeamByName(info.teamName);
+    const defender = game.getTeamByName(targetTeam);
 
     if (!attacker || !defender) return cb?.({ ok: false });
-    if (attacker.name === targetName) return cb?.({ ok: false });
+    if (info.teamName === targetTeam) return cb?.({ ok: false });
     if (attacker.factoryHP <= 0 || defender.factoryHP <= 0) return cb?.({ ok: false });
     if (numFighters < 1 || numFighters > attacker.fighters) return cb?.({ ok: false });
 
-    // Commit the ships
     attacker.fighters -= numFighters;
 
     const arrivalTime = Date.now() + (TRAVEL_TIME * 1000);
     game.fleets.push({
       id: Date.now() + Math.random(),
-      from: attacker.name,
-      to: targetName,
+      from: info.teamName,
+      to: targetTeam,
       fighters: numFighters,
       arrivalTime
     });
 
-    game.addEvent(`${attacker.name} launched ${numFighters} FTR at ${targetName} (ETA ${TRAVEL_TIME}s)`);
+    game.addEvent(`[${info.teamName}] War Commander launched ${numFighters} FTR at ${targetTeam} (ETA ${TRAVEL_TIME}s)`);
+    persistGameState(game);
     broadcastState(game);
     cb?.({ ok: true });
   });
 
-  socket.on('transferTi', ({ targetName, amount }, cb) => {
-    const game = findGameBySocket(socket.id);
-    if (!game || game.status !== 'running') return cb?.({ ok: false });
+  // Negotiator-only action
+  socket.on('transferTi', ({ targetTeam, amount }, cb) => {
+    const info = socketToPlayer.get(socket.id);
+    if (!info || info.role !== 'negotiator') return cb?.({ ok: false, error: 'Only the Negotiator can transfer titanium' });
 
-    const sender = game.getPlayerBySocket(socket.id);
-    const receiver = game.players.get(targetName);
+    const game = info.game;
+    if (game.status !== 'running') return cb?.({ ok: false });
 
-    if (!sender || !receiver || sender.name === targetName) return cb?.({ ok: false });
+    const sender = game.getTeamByName(info.teamName);
+    const receiver = game.getTeamByName(targetTeam);
+
+    if (!sender || !receiver || info.teamName === targetTeam) return cb?.({ ok: false });
     if (sender.factoryHP <= 0 || receiver.factoryHP <= 0) return cb?.({ ok: false });
-    if (amount !== 10 && amount !== 25 && amount !== 50) return cb?.({ ok: false });
+    if (![10, 25, 50].includes(amount)) return cb?.({ ok: false });
     if (sender.titanium < amount) return cb?.({ ok: false });
 
     sender.titanium -= amount;
     receiver.titanium += amount;
 
-    game.addEvent(`${sender.name} transferred ${amount} Ti to ${receiver.name}`);
+    game.addEvent(`[${info.teamName}] Negotiator transferred ${amount} Ti to ${targetTeam}`);
+    persistGameState(game);
     broadcastState(game);
     cb?.({ ok: true });
   });
 
   socket.on('endGame', (cb) => {
-    const game = findGameBySocket(socket.id);
-    if (!game || !game.isHost(socket.id)) return cb?.({ ok: false });
+    // Support both pure host and (legacy) player who happens to be host
+    let game = null;
+    const info = socketToPlayer.get(socket.id);
+    if (info) {
+      game = info.game;
+    } else {
+      for (const g of games.values()) {
+        if (g.hostSocketId === socket.id) {
+          game = g;
+          break;
+        }
+      }
+    }
+    if (!game) return cb?.({ ok: false, error: 'Not in a game' });
+    if (!game.isHost(socket.id)) return cb?.({ ok: false, error: 'Only host can end the game' });
 
     game.status = 'ended';
     game.addEvent('Game ended by host');
+    persistGameState(game);
     broadcastState(game);
     cb?.({ ok: true });
   });
 
   socket.on('disconnect', () => {
-    // We keep the player in the game (Chromebook sleep, tab close, etc.)
-    // They can rejoin with same name + code
+    // Keep role + team assignment so they can rejoin with same name + team + code
     console.log('Client disconnected:', socket.id);
   });
 });
-
-function findGameBySocket(socketId) {
-  for (const game of games.values()) {
-    for (const p of game.players.values()) {
-      if (p.socketId === socketId) return game;
-    }
-  }
-  return null;
-}
 
 // ============ STATIC FILES + SERVER START ============
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+// Teacher-only interface (students should use the main URL, not this one)
+app.get('/host', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
@@ -472,27 +717,31 @@ function getLocalIPv4Addresses() {
 server.listen(PORT, '0.0.0.0', () => {
   console.log('');
   console.log('╔════════════════════════════════════════════════════╗');
-  console.log('║           STARFIGHT — CLASSROOM EDITION            ║');
+  console.log('║           STAR POINT — TEAMS + ROLES EDITION       ║');
+  console.log('║     3 players per team: War / Negotiator / Builder ║');
   console.log('╚════════════════════════════════════════════════════╝');
   console.log('');
   console.log(`  Server running on port ${PORT}`);
-  console.log(`  Teacher browser:      http://localhost:${PORT}`);
+  console.log(`  Teacher (host) page:  http://localhost:${PORT}/host`);
+  console.log(`  Student page:         http://localhost:${PORT}/`);
   console.log('');
   console.log('  === STUDENT CONNECTION ADDRESSES ===');
 
   const addrs = getLocalIPv4Addresses();
   if (addrs.length > 0) {
     addrs.forEach(({ address, interface: iface }) => {
-      console.log(`    http://${address}:${PORT}     (interface: ${iface})`);
+      console.log(`    Student URL:  http://${address}:${PORT}/`);
+      console.log(`    Teacher URL:  http://${address}:${PORT}/host     (interface: ${iface})`);
     });
   } else {
     console.log(`    (No non-loopback IPv4 found — check your network)`);
   }
 
   console.log('');
-  console.log('  IMPORTANT FOR REMOTE PLAYERS:');
+  console.log('  IMPORTANT:');
+  console.log('  - Give students only the main URL (without /host)');
+  console.log('  - The /host page is for the teacher only');
   console.log('  - All computers must be on the SAME WiFi/LAN');
-  console.log('  - If students cannot reach it, try a different listed address');
   console.log('  - Temporarily allow port 3000 in your firewall if needed');
   console.log('    (Linux example: sudo ufw allow 3000)');
   console.log('');
