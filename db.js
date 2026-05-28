@@ -12,8 +12,9 @@ function initDb() {
   db.exec(`
     CREATE TABLE IF NOT EXISTS games (
       code TEXT PRIMARY KEY,
-      status TEXT NOT NULL DEFAULT 'waiting', -- waiting | running | ended
+      status TEXT NOT NULL DEFAULT 'waiting', -- waiting | running | saved | ended
       winner TEXT,
+      map_size INTEGER DEFAULT 13,
       created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
       last_saved INTEGER NOT NULL DEFAULT (strftime('%s','now'))
     );
@@ -52,10 +53,36 @@ function initDb() {
       FOREIGN KEY(game_code) REFERENCES games(code) ON DELETE CASCADE
     );
 
+    -- Map persistence tables (new for saved games feature)
+    CREATE TABLE IF NOT EXISTS game_maps (
+      game_code TEXT PRIMARY KEY,
+      gas_giant_x INTEGER NOT NULL,
+      gas_giant_y INTEGER NOT NULL,
+      moons TEXT NOT NULL, -- JSON array of {x,y}
+      FOREIGN KEY(game_code) REFERENCES games(code) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS team_starts (
+      game_code TEXT NOT NULL,
+      team_name TEXT NOT NULL,
+      start_x INTEGER NOT NULL,
+      start_y INTEGER NOT NULL,
+      FOREIGN KEY(game_code) REFERENCES games(code) ON DELETE CASCADE,
+      PRIMARY KEY (game_code, team_name)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_teams_game ON teams(game_code);
     CREATE INDEX IF NOT EXISTS idx_players_game ON players(game_code);
     CREATE INDEX IF NOT EXISTS idx_fleets_game ON fleets(game_code);
+    CREATE INDEX IF NOT EXISTS idx_team_starts_game ON team_starts(game_code);
   `);
+
+  // Safe upgrade: add map_size column if missing (for existing databases)
+  try {
+    db.exec(`ALTER TABLE games ADD COLUMN map_size INTEGER DEFAULT 13`);
+  } catch (e) {
+    // Column already exists or other harmless error
+  }
 
   console.log('[DB] Initialized starpoint.db');
   return db;
@@ -89,10 +116,27 @@ function loadAllGames() {
     const players = getDb().prepare('SELECT * FROM players WHERE game_code = ?').all(g.code);
     const fleets = getDb().prepare('SELECT * FROM fleets WHERE game_code = ?').all(g.code);
 
+    // Load map data if present
+    const mapRow = getDb().prepare('SELECT * FROM game_maps WHERE game_code = ?').get(g.code);
+    let mapData = null;
+    if (mapRow) {
+      mapData = {
+        gasGiant: { x: mapRow.gas_giant_x, y: mapRow.gas_giant_y },
+        moons: JSON.parse(mapRow.moons || '[]')
+      };
+    }
+
+    const startsRows = getDb().prepare('SELECT * FROM team_starts WHERE game_code = ?').all(g.code);
+    const starts = {};
+    for (const s of startsRows) {
+      starts[s.team_name] = { x: s.start_x, y: s.start_y };
+    }
+
     result.push({
       code: g.code,
       status: g.status,
       winner: g.winner,
+      mapSize: g.map_size || 13,
       teams: teams.map(t => ({
         name: t.name,
         titanium: t.titanium,
@@ -111,7 +155,9 @@ function loadAllGames() {
         to: f.to_team,
         fighters: f.fighters,
         arrivalTime: f.arrival_time
-      }))
+      })),
+      mapData,           // { gasGiant, moons }
+      teamStarts: starts // { teamName: {x,y} }
     });
   }
   return result;
@@ -209,6 +255,65 @@ function clearFleetsForGame(gameCode) {
   getDb().prepare('DELETE FROM fleets WHERE game_code = ?').run(gameCode);
 }
 
+// === MAP PERSISTENCE (for saved games feature) ===
+
+function saveGameMap(gameCode, mapSize, gasGiant, moons) {
+  getDb().prepare(`
+    INSERT INTO game_maps (game_code, gas_giant_x, gas_giant_y, moons)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(game_code) DO UPDATE SET
+      gas_giant_x = excluded.gas_giant_x,
+      gas_giant_y = excluded.gas_giant_y,
+      moons = excluded.moons
+  `).run(gameCode, gasGiant.x, gasGiant.y, JSON.stringify(moons || []));
+
+  // Also update map_size on the games table
+  getDb().prepare(`UPDATE games SET map_size = ? WHERE code = ?`).run(mapSize, gameCode);
+}
+
+function saveTeamStarts(gameCode, starts) {
+  const stmt = getDb().prepare(`
+    INSERT INTO team_starts (game_code, team_name, start_x, start_y)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(game_code, team_name) DO UPDATE SET
+      start_x = excluded.start_x,
+      start_y = excluded.start_y
+  `);
+
+  for (const [teamName, pos] of Object.entries(starts || {})) {
+    stmt.run(gameCode, teamName, pos.x, pos.y);
+  }
+}
+
+function getGameMapData(gameCode) {
+  const row = getDb().prepare('SELECT * FROM game_maps WHERE game_code = ?').get(gameCode);
+  if (!row) return null;
+
+  return {
+    gasGiant: { x: row.gas_giant_x, y: row.gas_giant_y },
+    moons: JSON.parse(row.moons || '[]')
+  };
+}
+
+function getTeamStarts(gameCode) {
+  const rows = getDb().prepare('SELECT * FROM team_starts WHERE game_code = ?').all(gameCode);
+  const starts = {};
+  for (const r of rows) {
+    starts[r.team_name] = { x: r.start_x, y: r.start_y };
+  }
+  return starts;
+}
+
+function updateGameStatusAndMapSize(code, status, mapSize = null) {
+  if (mapSize) {
+    getDb().prepare(`UPDATE games SET status = ?, map_size = ?, last_saved = strftime('%s','now') WHERE code = ?`)
+      .run(status, mapSize, code);
+  } else {
+    getDb().prepare(`UPDATE games SET status = ?, last_saved = strftime('%s','now') WHERE code = ?`)
+      .run(status, code);
+  }
+}
+
 module.exports = {
   initDb,
   getDb,
@@ -224,5 +329,11 @@ module.exports = {
   addFleet,
   removeFleetsByArrival,
   getFleetsForGame,
-  clearFleetsForGame
+  clearFleetsForGame,
+  // Map persistence
+  saveGameMap,
+  saveTeamStarts,
+  getGameMapData,
+  getTeamStarts,
+  updateGameStatusAndMapSize
 };

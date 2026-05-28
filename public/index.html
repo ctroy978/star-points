@@ -150,6 +150,100 @@
     .three-col { grid-template-columns: 1fr; }
   }
   .disabled-note { font-size: 10px; color: #664433; margin-top: 3px; }
+
+  /* === NEW TAB SYSTEM (UI + Map branch) === */
+  .tab-bar {
+    display: flex;
+    gap: 4px;
+    border-bottom: 2px solid var(--green-dim);
+    margin-bottom: 10px;
+    padding-bottom: 4px;
+  }
+  .tab-button {
+    background: #000;
+    color: var(--green-dim);
+    border: 1px solid var(--green-dim);
+    padding: 6px 16px;
+    font-family: inherit;
+    font-size: 13px;
+    cursor: pointer;
+    letter-spacing: 1px;
+  }
+  .tab-button:hover {
+    color: var(--green);
+    border-color: var(--green);
+  }
+  .tab-button.active {
+    background: #003322;
+    color: var(--amber);
+    border-color: var(--amber);
+  }
+
+  .tab-pane {
+    display: none;
+  }
+  .tab-pane.active {
+    display: block;
+  }
+
+  #tab-content {
+    margin-bottom: 8px;
+  }
+
+  /* Map size selector in lobby */
+  .map-size-option {
+    border: 1px solid var(--green-dim);
+    background: #000;
+    padding: 6px 10px;
+    text-align: center;
+    cursor: pointer;
+    min-width: 70px;
+    font-size: 12px;
+    line-height: 1.2;
+  }
+  .map-size-option:hover {
+    border-color: var(--green);
+    color: var(--green);
+  }
+  .map-size-option.selected {
+    border-color: var(--amber);
+    background: #003322;
+    color: var(--amber);
+  }
+
+  /* Map grid - 13x13 static, non-interactive */
+  .map-container {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 16px 0;
+  }
+  .map-grid {
+    display: grid;
+    grid-template-columns: repeat(13, 46px);
+    grid-template-rows: repeat(13, 46px);
+    gap: 0;
+    border: 2px solid var(--green-dim);
+    background: #050505;
+  }
+  .map-cell {
+    border: 1px solid #003322;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    color: var(--green-dim);
+    user-select: none;
+    pointer-events: none; /* explicitly non-interactive */
+    background: #050505;
+  }
+  .map-cell.gas-giant {
+    color: var(--amber);
+    font-size: 18px;
+    font-weight: bold;
+    text-shadow: 0 0 6px #ffcc33;
+    background: #112200;
+  }
 </style>
 </head>
 <body>
@@ -192,6 +286,13 @@
         <input id="reclaim-code" type="text" maxlength="4" placeholder="K9RX" style="width:70px; text-transform:uppercase;">
         <button class="btn btn-small" onclick="reclaimAsHost()">Reclaim as Host</button>
       </div>
+
+      <!-- SAVED GAMES SECTION (new) -->
+      <div id="saved-games-section" style="margin-top:14px; padding-top:10px; border-top:1px solid #003322;">
+        <div style="font-size:12px; color:var(--amber); margin-bottom:6px;">SAVED / PREVIOUS GAMES</div>
+        <button class="btn btn-small" onclick="refreshSavedGamesList()">Refresh List</button>
+        <div id="saved-games-list" style="margin-top:6px; font-size:11px; max-height:140px; overflow:auto;"></div>
+      </div>
     </div>
 
     <!-- STUDENT PATH -->
@@ -225,6 +326,29 @@
     <div class="panel">
       <div class="panel-title">WAITING FOR TEAMS — CODE: <span id="lobby-code" style="font-size:18px;letter-spacing:3px;"></span></div>
       <div id="lobby-teams" style="margin:8px 0;"></div>
+
+      <!-- HOST-ONLY MAP SIZE SELECTOR -->
+      <div id="lobby-map-selector" class="hidden" style="margin:10px 0; padding:8px; border:1px solid #003322; background:#050505;">
+        <div style="font-size:12px; color:var(--amber); margin-bottom:6px; letter-spacing:1px;">MAP SIZE (HOST ONLY)</div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <div class="map-size-option" data-size="13" onclick="selectMapSize(13)">
+            <strong>13×13</strong><br>
+            <span style="font-size:10px; color:#006633;">4–6 teams</span>
+          </div>
+          <div class="map-size-option" data-size="15" onclick="selectMapSize(15)">
+            <strong>15×15</strong><br>
+            <span style="font-size:10px; color:#006633;">6–8 teams</span>
+          </div>
+          <div class="map-size-option" data-size="17" onclick="selectMapSize(17)">
+            <strong>17×17</strong><br>
+            <span style="font-size:10px; color:#006633;">8+ teams</span>
+          </div>
+        </div>
+        <div id="lobby-selected-map" style="margin-top:6px; font-size:11px; color:#ffcc33;">
+          Selected: <span id="selected-map-size">13×13</span>
+        </div>
+      </div>
+
       <div style="margin-top:8px;">
         <button id="btn-start" class="btn" onclick="startGame()" style="font-size:15px; padding:6px 22px;">START GAME (needs 2+ full teams)</button>
         <button class="btn" onclick="newSession()" style="margin-left:8px;">LEAVE SESSION</button>
@@ -240,73 +364,104 @@
 
   <!-- MAIN GAME SCREEN -->
   <div id="game-screen" class="hidden">
-    <div class="three-col">
-
-      <!-- WAR COMMANDER PANEL -->
-      <div class="role-section" id="war-section">
-        <div class="role-header">WAR COMMANDER — ATTACKS &amp; FLEETS</div>
-        <div class="panel" style="margin:0 0 6px 0; padding:6px 8px;">
-          <div class="stat-row"><span>Fighters available</span><span id="war-fighters" class="big-number" style="font-size:20px;">0</span></div>
-          <div style="margin:6px 0 4px;">
-            <select id="attack-target" style="width:120px;"></select>
-            <input id="attack-num" type="number" value="5" min="1" style="width:46px; text-align:center; margin:0 2px;">
-            <button class="btn btn-small" onclick="adjustAttack(-1)">−</button>
-            <button class="btn btn-small" onclick="adjustAttack(1)">+</button>
-            <button class="btn" onclick="launchAttack()" id="btn-attack">LAUNCH</button>
-          </div>
-          <div style="font-size:10px; color:#006633;">8s travel • Canons intercept 1:1 • Survivors return</div>
-          <div id="attack-disabled" class="disabled-note hidden">View only — you are not the War Commander</div>
-        </div>
-
-        <div class="panel" style="margin:0; padding:6px 8px;">
-          <div class="panel-title">FLEETS IN TRANSIT</div>
-          <div id="fleets" class="fleet-list">No fleets in space.</div>
-        </div>
-      </div>
-
-      <!-- NEGOTIATOR PANEL -->
-      <div class="role-section" id="neg-section">
-        <div class="role-header">NEGOTIATOR — TITANIUM &amp; TRADING</div>
-        <div class="panel" style="margin:0 0 6px 0; padding:6px 8px;">
-          <div class="stat-row"><span>Your Team Titanium</span><span id="neg-ti" class="big-number" style="font-size:20px;">0</span></div>
-          <div style="margin-top:6px;">
-            <select id="trade-target" style="width:120px;"></select>
-            <button class="btn btn-small" onclick="transferTi(10)">SEND 10</button>
-            <button class="btn btn-small" onclick="transferTi(25)">25</button>
-            <button class="btn btn-small" onclick="transferTi(50)">50</button>
-          </div>
-          <div style="font-size:10px; color:#006633;">Instant transfer to any living team</div>
-          <div id="trade-disabled" class="disabled-note hidden">View only — you are not the Negotiator</div>
-        </div>
-
-        <div class="panel" style="margin:0; padding:6px 8px;">
-          <div class="panel-title">OTHER TEAMS</div>
-          <div id="other-teams" class="teams-grid"></div>
-        </div>
-      </div>
-
-      <!-- BUILDER PANEL -->
-      <div class="role-section" id="builder-section">
-        <div class="role-header">BUILDER — PRODUCTION &amp; ECONOMY</div>
-        <div class="panel" style="margin:0 0 6px 0; padding:6px 8px;">
-          <div class="stat-row"><span>Miners</span><span id="build-miners" class="big-number" style="font-size:20px;">0</span></div>
-          <div class="stat-row" style="font-size:11px;"><span>Income / cycle</span><span id="build-income">+5 Ti</span></div>
-          <div style="margin:6px 0 4px;">
-            <button class="btn btn-small" onclick="queueBuild('miner')">+ MINER (30 Ti, 45s)</button>
-            <button class="btn btn-small" onclick="queueBuild('fighter')">+ FTR (20 Ti)</button>
-            <button class="btn btn-small" onclick="queueBuild('canon')">+ DCN (10 Ti)</button>
-          </div>
-          <div id="build-disabled" class="disabled-note hidden">View only — you are not the Builder</div>
-        </div>
-
-        <div class="panel" style="margin:0; padding:6px 8px;">
-          <div class="panel-title">PRODUCTION QUEUE</div>
-          <div id="build-status" style="min-height:42px; font-size:12px;"></div>
-        </div>
-      </div>
+    <!-- NEW TAB BAR -->
+    <div class="tab-bar" id="tab-bar">
+      <button class="tab-button active" onclick="switchTab('war')">War</button>
+      <button class="tab-button" onclick="switchTab('negotiator')">Negotiator</button>
+      <button class="tab-button" onclick="switchTab('builder')">Builder</button>
+      <button class="tab-button" onclick="switchTab('map')">Map</button>
     </div>
 
-    <!-- SHARED: EVENT LOG -->
+    <!-- TAB CONTENT PANES -->
+    <div id="tab-content">
+
+      <!-- WAR TAB -->
+      <div id="tab-war" class="tab-pane active">
+        <div class="role-section">
+          <div class="role-header">WAR COMMANDER — ATTACKS &amp; FLEETS</div>
+          <div class="panel" style="margin:0 0 6px 0; padding:6px 8px;">
+            <div class="stat-row"><span>Fighters available</span><span id="war-fighters" class="big-number" style="font-size:20px;">0</span></div>
+            <div style="margin:6px 0 4px;">
+              <select id="attack-target" style="width:120px;"></select>
+              <input id="attack-num" type="number" value="5" min="1" style="width:46px; text-align:center; margin:0 2px;">
+              <button class="btn btn-small" onclick="adjustAttack(-1)">−</button>
+              <button class="btn btn-small" onclick="adjustAttack(1)">+</button>
+              <button class="btn" onclick="launchAttack()" id="btn-attack">LAUNCH</button>
+            </div>
+            <div style="font-size:10px; color:#006633;">8s travel • Canons intercept 1:1 • Survivors return</div>
+            <div id="attack-disabled" class="disabled-note hidden">View only — you are not the War Commander</div>
+          </div>
+
+          <div class="panel" style="margin:0; padding:6px 8px;">
+            <div class="panel-title">FLEETS IN TRANSIT</div>
+            <div id="fleets" class="fleet-list">No fleets in space.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- NEGOTIATOR TAB -->
+      <div id="tab-negotiator" class="tab-pane">
+        <div class="role-section">
+          <div class="role-header">NEGOTIATOR — TITANIUM &amp; TRADING</div>
+          <div class="panel" style="margin:0 0 6px 0; padding:6px 8px;">
+            <div class="stat-row"><span>Your Team Titanium</span><span id="neg-ti" class="big-number" style="font-size:20px;">0</span></div>
+            <div style="margin-top:6px;">
+              <select id="trade-target" style="width:120px;"></select>
+              <button class="btn btn-small" onclick="transferTi(10)">SEND 10</button>
+              <button class="btn btn-small" onclick="transferTi(25)">25</button>
+              <button class="btn btn-small" onclick="transferTi(50)">50</button>
+            </div>
+            <div style="font-size:10px; color:#006633;">Instant transfer to any living team</div>
+            <div id="trade-disabled" class="disabled-note hidden">View only — you are not the Negotiator</div>
+          </div>
+
+          <div class="panel" style="margin:0; padding:6px 8px;">
+            <div class="panel-title">OTHER TEAMS</div>
+            <div id="other-teams" class="teams-grid"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- BUILDER TAB -->
+      <div id="tab-builder" class="tab-pane">
+        <div class="role-section">
+          <div class="role-header">BUILDER — PRODUCTION &amp; ECONOMY</div>
+          <div class="panel" style="margin:0 0 6px 0; padding:6px 8px;">
+            <div class="stat-row"><span>Miners</span><span id="build-miners" class="big-number" style="font-size:20px;">0</span></div>
+            <div class="stat-row" style="font-size:11px;"><span>Income / cycle</span><span id="build-income">+5 Ti</span></div>
+            <div style="margin:6px 0 4px;">
+              <button class="btn btn-small" onclick="queueBuild('miner')">+ MINER (30 Ti, 45s)</button>
+              <button class="btn btn-small" onclick="queueBuild('fighter')">+ FTR (20 Ti)</button>
+              <button class="btn btn-small" onclick="queueBuild('canon')">+ DCN (10 Ti)</button>
+            </div>
+            <div id="build-disabled" class="disabled-note hidden">View only — you are not the Builder</div>
+          </div>
+
+          <div class="panel" style="margin:0; padding:6px 8px;">
+            <div class="panel-title">PRODUCTION QUEUE</div>
+            <div id="build-status" style="min-height:42px; font-size:12px;"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- MAP TAB -->
+      <div id="tab-map" class="tab-pane">
+        <div class="panel" style="padding: 10px;">
+          <div class="panel-title" style="margin-bottom:6px;">
+            STAR SYSTEM MAP — <span id="map-size-display">13×13</span>
+          </div>
+          <div class="map-container" id="map-container">
+            <!-- Grid is built dynamically by renderMap() -->
+          </div>
+          <div style="font-size:10px; color:#006633; margin-top:6px; text-align:center;">
+            Non-interactive • Gas giant at center • Your starting location shown only to your team
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- SHARED: EVENT LOG (always visible during game) -->
     <div class="panel">
       <div class="panel-title">EVENT LOG</div>
       <div id="event-log" class="log"></div>
@@ -315,8 +470,14 @@
     <!-- HOST CONTROLS -->
     <div id="host-controls" class="panel hidden">
       <div class="panel-title">HOST CONTROLS</div>
-      <button class="btn btn-danger" onclick="endGame()">END GAME EARLY</button>
-      <button class="btn" onclick="newSession()">NEW SESSION</button>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button class="btn" onclick="saveGameForLater()">SAVE GAME FOR LATER</button>
+        <button class="btn btn-danger" onclick="endGameCleanly()">END GAME CLEANLY</button>
+        <button class="btn" onclick="newSession()">NEW SESSION</button>
+      </div>
+      <div style="font-size:10px; color:#006633; margin-top:4px;">
+        "Save for Later" keeps the game restorable with full map + teams.
+      </div>
     </div>
   </div>
 
@@ -346,6 +507,7 @@ let myTeamName = null;
 let myRole = null;           // 'war' | 'negotiator' | 'builder'
 let isHost = false;
 let lastState = null;
+let selectedMapSize = 13;    // Default for host map selection
 
 // Configure UI based on whether this is the teacher host page or student page
 function configurePageForRole() {
@@ -355,6 +517,13 @@ function configurePageForRole() {
   if (IS_HOST_PAGE) {
     // Teacher mode - show everything, add strong warning
     document.title = 'STAR POINT — TEACHER HOST';
+
+    // Show saved games section and load list
+    setTimeout(() => {
+      const savedSection = el('saved-games-section');
+      if (savedSection) savedSection.style.display = 'block';
+      refreshSavedGamesList();
+    }, 600);
 
     // Add a clear warning banner at the very top of the container if it doesn't exist
     const container = document.querySelector('.container');
@@ -472,7 +641,8 @@ function joinGame() {
 
 // ===== ACTIONS (role gated on server too) =====
 function startGame() {
-  socket.emit('startGame', (res) => {
+  const payload = isHost ? { mapSize: selectedMapSize } : {};
+  socket.emit('startGame', payload, (res) => {
     if (res && !res.ok) alert(res.error || 'Cannot start');
   });
 }
@@ -512,8 +682,105 @@ function endGame() {
   socket.emit('endGame');
 }
 
+function endGameCleanly() {
+  if (!confirm('End this game cleanly? It will be archived and no longer restorable.')) return;
+  socket.emit('endGame');
+}
+
+function saveGameForLater() {
+  if (!confirm('Save this game so you can reload it later (e.g. next class)?')) return;
+  socket.emit('saveGame', (res) => {
+    if (res && res.ok) {
+      alert('Game saved successfully. You can reload it from the host page later.');
+    } else if (res && res.error) {
+      alert(res.error);
+    }
+  });
+}
+
+// === Saved Games Management (for teachers) ===
+function refreshSavedGamesList() {
+  const container = el('saved-games-list');
+  if (!container) return;
+  container.innerHTML = 'Loading...';
+
+  socket.emit('listSavedGames', (res) => {
+    if (!res || !res.ok) {
+      container.innerHTML = '<span style="color:#ff6666">Failed to load saved games.</span>';
+      return;
+    }
+
+    if (!res.games || res.games.length === 0) {
+      container.innerHTML = '<span style="color:#006633">No saved games yet.</span>';
+      return;
+    }
+
+    container.innerHTML = '';
+    res.games.forEach(g => {
+      const div = document.createElement('div');
+      div.style.cssText = 'margin:3px 0; padding:4px 6px; border:1px solid #003322; background:#050505;';
+      const statusLabel = g.status === 'saved' ? 'SAVED' : g.status.toUpperCase();
+      div.innerHTML = `
+        <strong>${g.code}</strong> — ${statusLabel} — ${g.mapSize}×${g.mapSize}<br>
+        <span style="font-size:10px;">${g.teamCount} teams, ${g.playerCount} players</span>
+        <button class="btn btn-small" style="margin-left:8px;" onclick="loadSavedGame('${g.code}')">LOAD</button>
+      `;
+      container.appendChild(div);
+    });
+  });
+}
+
+function loadSavedGame(code) {
+  if (!confirm(`Load saved game ${code}? This will make you the host of that session.`)) return;
+
+  socket.emit('loadSavedGame', { code }, (res) => {
+    if (!res || !res.ok) {
+      alert(res?.error || 'Failed to load saved game');
+      return;
+    }
+
+    currentCode = res.code;
+    myPlayerName = 'Teacher';
+    myTeamName = null;
+    myRole = null;
+    isHost = true;
+
+    // Hide join screen and show lobby for the loaded game
+    hide('join-screen');
+    show('lobby-screen');
+    el('lobby-code').textContent = currentCode;
+    el('game-code').textContent = 'CODE: ' + currentCode;
+    el('game-status').textContent = 'LOADED SAVED GAME — ' + (res.status || '').toUpperCase();
+  });
+}
+
+// Auto-refresh saved games list when on host page
+function maybeRefreshSavedGames() {
+  const section = el('saved-games-section');
+  if (section && !section.classList.contains('hidden')) {
+    // Only auto-refresh if visible
+    refreshSavedGamesList();
+  }
+}
+
 function newSession() {
   location.reload();
+}
+
+// Map size selection (host only in lobby)
+function selectMapSize(size) {
+  selectedMapSize = size;
+
+  // Update visual selection
+  document.querySelectorAll('.map-size-option').forEach(el => {
+    el.classList.remove('selected');
+    if (parseInt(el.dataset.size) === size) {
+      el.classList.add('selected');
+    }
+  });
+
+  const display = document.getElementById('selected-map-size');
+  if (display) display.textContent = `${size}×${size}`;
 }
 
 // ===== RENDERING =====
@@ -567,6 +834,14 @@ function render(state) {
 
   show('game-screen');
 
+  // Ensure we have a sensible default tab when entering the game screen
+  if (!document.getElementById('tab-' + currentTab)?.classList.contains('active')) {
+    const preferred = (state.myRole && ['war','negotiator','builder'].includes(state.myRole)) 
+      ? state.myRole 
+      : 'war';
+    switchTab(preferred);
+  }
+
   // Host controls
   if (state.isHost) {
     show('host-controls');
@@ -588,14 +863,14 @@ function render(state) {
   el('attack-num').disabled = !(canControl && isWar);
   if (isWar && !isPureHost) hide('attack-disabled'); else show('attack-disabled');
 
-  // Negotiator section
-  const tradeBtns = document.querySelectorAll('#neg-section .btn');
+  // Negotiator controls (now inside tab-negotiator)
+  const tradeBtns = document.querySelectorAll('#tab-negotiator .btn');
   tradeBtns.forEach(b => b.disabled = !(canControl && isNeg));
   el('trade-target').disabled = !(canControl && isNeg);
   if (isNeg && !isPureHost) hide('trade-disabled'); else show('trade-disabled');
 
-  // Builder section
-  const buildBtns = document.querySelectorAll('#builder-section .btn');
+  // Builder controls (now inside tab-builder)
+  const buildBtns = document.querySelectorAll('#tab-builder .btn');
   buildBtns.forEach(b => b.disabled = !(canControl && isBuilder));
   if (isBuilder && !isPureHost) hide('build-disabled'); else show('build-disabled');
 
@@ -629,6 +904,9 @@ function render(state) {
   // Build queue (per my team)
   renderBuildQueue(state, state.myTeam);
 
+  // Map (dynamic, supports 13/15/17)
+  renderMap(state);
+
   // Event log
   renderEventLog(state.eventLog);
 }
@@ -643,9 +921,13 @@ function renderLobby(state) {
     // Pure host view
     const info = document.createElement('div');
     info.style.cssText = 'background:#112200; padding:8px; margin-bottom:8px; border:1px solid #334400;';
+    let extra = '';
+    if (state.status === 'saved' || state.status === 'waiting') {
+      extra = `<br><span style="color:#ffcc33;">This is a previously saved game.</span>`;
+    }
     info.innerHTML = `<strong>You are the HOST (Teacher)</strong><br>
       Give students this code: <span style="font-size:18px; letter-spacing:3px; color:#ffcc33;">${state.code}</span><br>
-      Students join using the code + a team name. You do not belong to any team.`;
+      Students join using the code + a team name. You do not belong to any team.${extra}`;
     container.appendChild(info);
   }
 
@@ -669,6 +951,30 @@ function renderLobby(state) {
   const startBtn = el('btn-start');
   const fullTeams = teams.filter(t => (t.members || []).length === 3).length;
   startBtn.disabled = fullTeams < 2 || !state.isHost;
+
+  // Map size selector (host only)
+  const mapSelector = el('lobby-map-selector');
+  if (mapSelector) {
+    if (state.isHost) {
+      show('lobby-map-selector');
+
+      // Pre-select if server already has a choice (for reclaims)
+      const currentSize = state.mapSize || 13;
+      selectedMapSize = currentSize;
+
+      document.querySelectorAll('.map-size-option').forEach(el => {
+        el.classList.remove('selected');
+        if (parseInt(el.dataset.size) === currentSize) {
+          el.classList.add('selected');
+        }
+      });
+
+      const display = el('selected-map-size');
+      if (display) display.textContent = `${currentSize}×${currentSize}`;
+    } else {
+      hide('lobby-map-selector');
+    }
+  }
 
   // Show note for non-hosts
   const note = el('lobby-host-note');
@@ -800,6 +1106,107 @@ function renderEventLog(logLines) {
   });
   log.scrollTop = log.scrollHeight;
 }
+
+// ===== DYNAMIC MAP RENDERING (ui-map branch) =====
+function renderMap(state) {
+  const container = el('map-container');
+  if (!container) return;
+
+  const size = state.mapSize || 13;
+  const mapData = state.map || {};
+  const myStart = state.myStart || null;
+
+  // Update header
+  const sizeDisplay = el('map-size-display');
+  if (sizeDisplay) sizeDisplay.textContent = `${size}×${size}`;
+
+  container.innerHTML = '';
+
+  // Create wrapper for labels + grid
+  const wrapper = document.createElement('div');
+  wrapper.style.cssText = `display: grid; grid-template-columns: 22px repeat(${size}, 1fr); grid-template-rows: 18px repeat(${size}, 1fr); gap: 1px;`;
+
+  // Top-left corner empty
+  const corner = document.createElement('div');
+  corner.style.cssText = 'font-size:9px; color:#003322;';
+  wrapper.appendChild(corner);
+
+  // Column labels (A, B, C...)
+  for (let col = 0; col < size; col++) {
+    const label = document.createElement('div');
+    label.textContent = String.fromCharCode(65 + col); // A, B, C...
+    label.style.cssText = 'text-align:center; font-size:9px; color:#006633; line-height:1;';
+    wrapper.appendChild(label);
+  }
+
+  const gasGiant = mapData.gasGiant || { x: Math.floor(size/2), y: Math.floor(size/2) };
+  const moons = mapData.moons || [];
+
+  for (let row = 0; row < size; row++) {
+    // Row label (1, 2, 3...)
+    const rowLabel = document.createElement('div');
+    rowLabel.textContent = (row + 1).toString();
+    rowLabel.style.cssText = 'text-align:right; padding-right:3px; font-size:9px; color:#006633; line-height:1;';
+    wrapper.appendChild(rowLabel);
+
+    for (let col = 0; col < size; col++) {
+      const cell = document.createElement('div');
+      cell.className = 'map-cell';
+      cell.style.cssText = `width:100%; aspect-ratio:1; border:1px solid #003322; display:flex; align-items:center; justify-content:center; font-size:14px;`;
+
+      const isGasGiant = (col === gasGiant.x && row === gasGiant.y);
+      const isMyStart = myStart && col === myStart.x && row === myStart.y;
+      const isMoon = moons.some(m => m.x === col && m.y === row);
+
+      if (isGasGiant) {
+        cell.classList.add('gas-giant');
+        cell.textContent = '◎';
+        cell.style.color = 'var(--amber)';
+        cell.style.fontSize = '18px';
+        cell.style.textShadow = '0 0 4px #ffcc33';
+      } else if (isMyStart) {
+        cell.textContent = '★';
+        cell.style.color = '#ffcc33';
+        cell.style.fontSize = '16px';
+        cell.style.background = '#112200';
+      } else if (isMoon) {
+        cell.textContent = '○';
+        cell.style.color = '#00cc7a';
+        cell.style.fontSize = '12px';
+      }
+
+      wrapper.appendChild(cell);
+    }
+  }
+
+  container.appendChild(wrapper);
+}
+
+// ===== TAB SYSTEM (feature/ui-map) =====
+let currentTab = 'war';
+
+function switchTab(tab) {
+  currentTab = tab;
+
+  // Update button active states
+  document.querySelectorAll('.tab-button').forEach(btn => {
+    btn.classList.remove('active');
+    if (btn.textContent.toLowerCase() === tab) {
+      btn.classList.add('active');
+    }
+  });
+
+  // Show/hide panes
+  document.querySelectorAll('.tab-pane').forEach(pane => {
+    pane.classList.remove('active');
+  });
+  const target = document.getElementById('tab-' + tab);
+  if (target) target.classList.add('active');
+}
+
+
+
+// Map rendering is now handled dynamically in renderMap() called from render()
 
 // ===== SOCKET LISTENERS =====
 socket.on('connect', () => {
