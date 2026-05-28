@@ -101,6 +101,10 @@ class Game {
     this.tickCounter = 0;
     this.lastIncomeTick = 0;
     this.winner = null;
+
+    // Map system (new for ui-map branch)
+    this.mapSize = 13;                 // 13, 15, or 17
+    this.map = null;                   // { gasGiant, moons: [], starts: {teamName: {x,y}} }
   }
 
   // Create a new team or return existing
@@ -197,6 +201,19 @@ function persistGameState(game) {
     for (const f of game.fleets) {
       db.addFleet(game.code, f.from, f.to, f.fighters, f.arrivalTime);
     }
+
+    // === NEW: Persist map data if it exists ===
+    if (game.map && game.map.gasGiant) {
+      db.saveGameMap(game.code, game.mapSize, game.map.gasGiant, game.map.moons || []);
+      if (game.map.starts) {
+        db.saveTeamStarts(game.code, game.map.starts);
+      }
+    }
+
+    // Also ensure map_size is set even if no full map yet
+    if (game.mapSize) {
+      db.updateGameStatusAndMapSize(game.code, game.status, game.mapSize);
+    }
   } catch (e) {
     console.error('[DB] Persist error:', e.message);
   }
@@ -206,6 +223,7 @@ function hydrateSavedGame(saved) {
   const game = new Game(saved.code, null); // hostSocketId will be set on first reconnect
   game.status = saved.status;
   game.winner = saved.winner || null;
+  game.mapSize = saved.mapSize || 13;
 
   // Rebuild teams
   for (const t of saved.teams) {
@@ -239,15 +257,29 @@ function hydrateSavedGame(saved) {
     arrivalTime: f.arrivalTime
   }));
 
+  // === NEW: Restore persisted map data if available ===
+  if (saved.mapData && saved.mapData.gasGiant) {
+    game.map = {
+      gasGiant: saved.mapData.gasGiant,
+      moons: saved.mapData.moons || [],
+      starts: saved.teamStarts || {}
+    };
+    console.log(`[DB] Restored full map data for ${saved.code}`);
+  } else if (game.status === 'running' || game.status === 'saved') {
+    // Fallback: regenerate if we have no map data but game was active/saved
+    generateMapForGame(game);
+  }
+
   return game;
 }
 
 // Hydrate any games that were saved from previous runs
+// We now restore 'waiting', 'running', and 'saved' games (but not 'ended')
 for (const saved of savedGames) {
   if (saved.status !== 'ended') {
     const game = hydrateSavedGame(saved);
     games.set(saved.code, game);
-    console.log(`[DB] Restored game ${saved.code} with ${game.teams.size} team(s)`);
+    console.log(`[DB] Restored game ${saved.code} (status: ${saved.status}) with ${game.teams.size} team(s)`);
   }
 }
 
@@ -323,7 +355,14 @@ function broadcastState(game) {
     fleets,
     builds,
     eventLog: [...game.eventLog],
-    winner: game.winner
+    winner: game.winner,
+    // Map data (new)
+    mapSize: game.mapSize,
+    map: game.map ? {
+      gasGiant: game.map.gasGiant,
+      moons: game.map.moons || []
+      // starts are sent privately below
+    } : null
   };
 
   // Send to regular players (they have role + team)
@@ -337,6 +376,12 @@ function broadcastState(game) {
       myRoleLabel: ROLE_LABELS[info.role],
       isHost: game.hostSocketId === socketId
     };
+
+    // Give this player their private starting location only
+    if (game.map && game.map.starts && info.teamName) {
+      payload.myStart = game.map.starts[info.teamName] || null;
+    }
+
     io.to(socketId).emit('gameUpdate', payload);
   }
 
@@ -347,7 +392,8 @@ function broadcastState(game) {
       myTeam: null,
       myRole: null,
       myRoleLabel: null,
-      isHost: true
+      isHost: true,
+      myStart: null
     };
     io.to(game.hostSocketId).emit('gameUpdate', hostPayload);
   }
@@ -468,6 +514,72 @@ function checkWinCondition(game) {
   }
 }
 
+// === MAP GENERATION (ui-map branch) ===
+function generateMapForGame(game) {
+  const size = game.mapSize;
+  const center = Math.floor(size / 2);
+
+  const gasGiant = { x: center, y: center };
+
+  // Simple moon count scaling
+  const moonCount = size === 13 ? 5 : size === 15 ? 7 : 10;
+
+  const moons = [];
+  // Place moons in a rough ring, avoiding center and edges too much
+  const ringDistance = Math.floor(size * 0.28);
+  for (let i = 0; i < moonCount; i++) {
+    const angle = (i / moonCount) * Math.PI * 2;
+    let mx = Math.round(center + Math.cos(angle) * ringDistance);
+    let my = Math.round(center + Math.sin(angle) * ringDistance * 0.85);
+
+    // Clamp + jitter to avoid overlap with center
+    mx = Math.max(2, Math.min(size - 3, mx + (i % 3 - 1)));
+    my = Math.max(2, Math.min(size - 3, my + (Math.floor(i / 2) % 3 - 1)));
+
+    moons.push({ x: mx, y: my });
+  }
+
+  // Assign one starting location per team, well spaced and away from center
+  const starts = {};
+  const teamNames = Array.from(game.teams.keys());
+  const margin = Math.floor(size * 0.22);
+
+  teamNames.forEach((teamName, index) => {
+    // Spread starts in corners/edges
+    const positions = [
+      { x: margin, y: margin },
+      { x: size - 1 - margin, y: margin },
+      { x: margin, y: size - 1 - margin },
+      { x: size - 1 - margin, y: size - 1 - margin },
+      { x: margin, y: Math.floor(size / 2) },
+      { x: size - 1 - margin, y: Math.floor(size / 2) },
+    ];
+
+    let pos = positions[index % positions.length];
+
+    // Small offset per team to avoid exact overlap
+    pos = {
+      x: Math.max(1, Math.min(size - 2, pos.x + (index % 3) - 1)),
+      y: Math.max(1, Math.min(size - 2, pos.y + Math.floor(index / 3) - 1))
+    };
+
+    // Ensure not on gas giant
+    if (pos.x === center && pos.y === center) {
+      pos.x = Math.max(1, pos.x - 2);
+    }
+
+    starts[teamName] = pos;
+  });
+
+  game.map = {
+    gasGiant,
+    moons,
+    starts   // teamName -> {x, y}
+  };
+
+  console.log(`[MAP] Generated ${size}x${size} map for game ${game.code} with ${moons.length} moons`);
+}
+
 // ============ SOCKET HANDLERS (Team + Role based) ============
 io.on('connection', (socket) => {
   console.log('Client connected:', socket.id);
@@ -495,6 +607,7 @@ io.on('connection', (socket) => {
     const game = games.get(code);
     if (!game) return cb({ ok: false, error: 'Invalid code' });
     if (game.status === 'ended') return cb({ ok: false, error: 'Game already ended' });
+    // 'saved' games are allowed to be reclaimed/joined (treated like waiting)
 
     // Rebind as host
     game.hostSocketId = socket.id;
@@ -512,6 +625,7 @@ io.on('connection', (socket) => {
     const game = games.get(code);
     if (!game) return cb({ ok: false, error: 'Invalid code' });
     if (game.status === 'ended') return cb({ ok: false, error: 'Game already ended' });
+    // 'saved' games are allowed to be reclaimed/joined (treated like waiting)
 
     const tName = (teamName || '').trim().slice(0, 16);
     const pName = (playerName || '').trim().slice(0, 14);
@@ -546,7 +660,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('startGame', (cb) => {
+  socket.on('startGame', (payload, cb) => {
     // Support both pure host and (legacy) player who happens to be host
     let game = null;
     const info = socketToPlayer.get(socket.id);
@@ -568,6 +682,17 @@ io.on('connection', (socket) => {
     if (completeTeams.length < 2) {
       return cb?.({ ok: false, error: 'Need at least 2 full teams (3 players each)' });
     }
+
+    // Capture map size from host (default 13 if not provided)
+    if (payload && payload.mapSize) {
+      const size = parseInt(payload.mapSize);
+      if ([13, 15, 17].includes(size)) {
+        game.mapSize = size;
+      }
+    }
+
+    // Generate map (gas giant, moons, team starting positions)
+    generateMapForGame(game);
 
     game.status = 'running';
     game.addEvent('GAME STARTED — Coordinate with your team! Builder produces, Negotiator trades, War Commander attacks.');
@@ -676,10 +801,89 @@ io.on('connection', (socket) => {
     if (!game.isHost(socket.id)) return cb?.({ ok: false, error: 'Only host can end the game' });
 
     game.status = 'ended';
-    game.addEvent('Game ended by host');
+    game.addEvent('Game ended cleanly by host');
     persistGameState(game);
     broadcastState(game);
     cb?.({ ok: true });
+  });
+
+  // New: Teacher can save a game for later without fully ending it
+  socket.on('saveGame', (cb) => {
+    let game = null;
+    const info = socketToPlayer.get(socket.id);
+    if (info) {
+      game = info.game;
+    } else {
+      for (const g of games.values()) {
+        if (g.hostSocketId === socket.id) {
+          game = g;
+          break;
+        }
+      }
+    }
+    if (!game) return cb?.({ ok: false, error: 'Not in a game' });
+    if (!game.isHost(socket.id)) return cb?.({ ok: false, error: 'Only host can save the game' });
+
+    const previousStatus = game.status;
+    game.status = 'saved';
+    game.addEvent('Game saved by host for later use');
+    persistGameState(game);
+
+    // Remove from active memory? No — keep it so the host can continue working with it if desired.
+    // But mark clearly as saved.
+
+    broadcastState(game);
+    cb?.({ ok: true, status: 'saved' });
+  });
+
+  // New: List all savable games for the teacher (on /host page)
+  socket.on('listSavedGames', (cb) => {
+    const allGames = db.loadAllGames();
+    const savable = allGames
+      .filter(g => g.status !== 'ended')
+      .map(g => ({
+        code: g.code,
+        status: g.status,
+        mapSize: g.mapSize,
+        teamCount: g.teams ? g.teams.length : 0,
+        playerCount: g.players ? g.players.length : 0,
+        lastSaved: g.last_saved || null
+      }));
+
+    cb?.({ ok: true, games: savable });
+  });
+
+  // New: Load a previously saved game into active memory
+  socket.on('loadSavedGame', ({ code }, cb) => {
+    if (!games.has(code)) {
+      // Try to load it fresh from DB
+      const allSaved = db.loadAllGames();
+      const found = allSaved.find(g => g.code === code && g.status !== 'ended');
+      if (!found) {
+        return cb?.({ ok: false, error: 'Saved game not found or already ended' });
+      }
+
+      const hydrated = hydrateSavedGame(found);
+      games.set(code, hydrated);
+      console.log(`[DB] Loaded saved game ${code} on demand`);
+    }
+
+    const game = games.get(code);
+    if (!game) return cb?.({ ok: false, error: 'Failed to load game' });
+
+    // Rebind the requesting socket as host
+    game.hostSocketId = socket.id;
+    socket.join(code);
+
+    // If it was 'saved', move it back to 'waiting' so it can be rejoined/started
+    if (game.status === 'saved') {
+      game.status = 'waiting';
+      game.addEvent('Saved game loaded by host');
+      persistGameState(game);
+    }
+
+    broadcastState(game);
+    cb?.({ ok: true, code, status: game.status });
   });
 
   socket.on('disconnect', () => {
