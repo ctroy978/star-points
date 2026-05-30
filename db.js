@@ -7,6 +7,7 @@ function initDb() {
   const dbPath = path.join(__dirname, 'starpoint.db');
   db = new Database(dbPath);
   db.pragma('journal_mode = WAL'); // better performance + crash safety
+  db.pragma('foreign_keys = ON');  // Required for ON DELETE CASCADE to actually work on child tables
 
   // Schema
   db.exec(`
@@ -88,7 +89,13 @@ function initDb() {
     `ALTER TABLE teams ADD COLUMN frigates INTEGER DEFAULT 0`,
     `ALTER TABLE teams ADD COLUMN destroyers INTEGER DEFAULT 0`,
     `ALTER TABLE teams ADD COLUMN buildings_json TEXT`,
-    `ALTER TABLE fleets ADD COLUMN frigates INTEGER DEFAULT 0`
+    `ALTER TABLE fleets ADD COLUMN frigates INTEGER DEFAULT 0`,
+    // MINING Phase 6: persistence for available_miners, probes, and deployed miners JSON per team
+    `ALTER TABLE teams ADD COLUMN available_miners INTEGER DEFAULT 0`,
+    `ALTER TABLE teams ADD COLUMN probes INTEGER DEFAULT 0`,
+    `ALTER TABLE teams ADD COLUMN deployed_miners_json TEXT`,
+    // MINING: anomalies (with discovery) JSON on map table
+    `ALTER TABLE game_maps ADD COLUMN anomalies TEXT`
   ];
   for (const sql of upgrades) {
     try { db.exec(sql); } catch (e) {}
@@ -132,7 +139,9 @@ function loadAllGames() {
     if (mapRow) {
       mapData = {
         gasGiant: { x: mapRow.gas_giant_x, y: mapRow.gas_giant_y },
-        moons: JSON.parse(mapRow.moons || '[]')
+        moons: JSON.parse(mapRow.moons || '[]'),
+        // MINING Phase 6
+        anomalies: mapRow.anomalies ? JSON.parse(mapRow.anomalies) : []
       };
     }
 
@@ -153,7 +162,11 @@ function loadAllGames() {
         frigates: t.frigates ?? 0,
         destroyers: t.destroyers ?? 0,
         buildings: t.buildings_json ? JSON.parse(t.buildings_json) : null,
-        factoryHP: t.factory_hp
+        factoryHP: t.factory_hp,
+        // MINING Phase 6
+        availableMiners: t.available_miners ?? 0,
+        probes: t.probes ?? 0,
+        deployedMiners: t.deployed_miners_json ? JSON.parse(t.deployed_miners_json) : null
       })),
       players: players.map(p => ({
         name: p.name,
@@ -186,15 +199,18 @@ function upsertTeam(gameCode, teamName, initialData = {}) {
     INSERT INTO teams (
       game_code, name,
       resources_json, frigates, destroyers, buildings_json,
-      factory_hp
+      factory_hp, available_miners, probes, deployed_miners_json
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(game_code, name) DO UPDATE SET
       resources_json = excluded.resources_json,
       frigates = excluded.frigates,
       destroyers = excluded.destroyers,
       buildings_json = excluded.buildings_json,
-      factory_hp = excluded.factory_hp
+      factory_hp = excluded.factory_hp,
+      available_miners = excluded.available_miners,
+      probes = excluded.probes,
+      deployed_miners_json = excluded.deployed_miners_json
   `);
 
   stmt.run(
@@ -204,7 +220,10 @@ function upsertTeam(gameCode, teamName, initialData = {}) {
     initialData.frigates ?? 0,
     initialData.destroyers ?? 0,
     initialData.buildings ? JSON.stringify(initialData.buildings) : null,
-    initialData.factoryHP ?? 100
+    initialData.factoryHP ?? 100,
+    initialData.availableMiners ?? 0,
+    initialData.probes ?? 0,
+    initialData.deployedMiners ? JSON.stringify(initialData.deployedMiners) : null
   );
 }
 
@@ -273,15 +292,16 @@ function clearFleetsForGame(gameCode) {
 
 // === MAP PERSISTENCE (for saved games feature) ===
 
-function saveGameMap(gameCode, mapSize, gasGiant, moons) {
+function saveGameMap(gameCode, mapSize, gasGiant, moons, anomalies = []) {
   getDb().prepare(`
-    INSERT INTO game_maps (game_code, gas_giant_x, gas_giant_y, moons)
-    VALUES (?, ?, ?, ?)
+    INSERT INTO game_maps (game_code, gas_giant_x, gas_giant_y, moons, anomalies)
+    VALUES (?, ?, ?, ?, ?)
     ON CONFLICT(game_code) DO UPDATE SET
       gas_giant_x = excluded.gas_giant_x,
       gas_giant_y = excluded.gas_giant_y,
-      moons = excluded.moons
-  `).run(gameCode, gasGiant.x, gasGiant.y, JSON.stringify(moons || []));
+      moons = excluded.moons,
+      anomalies = excluded.anomalies
+  `).run(gameCode, gasGiant.x, gasGiant.y, JSON.stringify(moons || []), JSON.stringify(anomalies || []));
 
   // Also update map_size on the games table
   getDb().prepare(`UPDATE games SET map_size = ? WHERE code = ?`).run(mapSize, gameCode);
@@ -307,7 +327,8 @@ function getGameMapData(gameCode) {
 
   return {
     gasGiant: { x: row.gas_giant_x, y: row.gas_giant_y },
-    moons: JSON.parse(row.moons || '[]')
+    moons: JSON.parse(row.moons || '[]'),
+    anomalies: row.anomalies ? JSON.parse(row.anomalies) : []
   };
 }
 

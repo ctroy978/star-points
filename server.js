@@ -3,6 +3,7 @@ const http = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
 const os = require('os');
+const fs = require('fs');
 const db = require('./db');
 
 const app = express();
@@ -12,6 +13,28 @@ const io = new Server(server, {
 });
 
 const PORT = process.env.PORT || 3000;
+
+// Debug logging setup - per game code, replaced on new game start
+const LOGS_DIR = path.join(__dirname, 'logs');
+if (!fs.existsSync(LOGS_DIR)) {
+  fs.mkdirSync(LOGS_DIR, { recursive: true });
+}
+
+function initGameDebugLog(game, code) {
+  game.debugLogPath = path.join(LOGS_DIR, `game_${code}.log`);
+  const header = `=== Game ${code} started at ${new Date().toISOString()} ===\n`;
+  fs.writeFileSync(game.debugLogPath, header);  // truncate / replace
+}
+
+function debugLog(game, message) {
+  if (!game || !game.debugLogPath) return;
+  const line = `[${new Date().toISOString()}] ${message}\n`;
+  try {
+    fs.appendFileSync(game.debugLogPath, line);
+  } catch (err) {
+    console.error('[DEBUG LOG ERROR]', err.message);
+  }
+}
 
 // ============ DB INIT (persistence for classroom restarts) ============
 db.initDb();
@@ -48,12 +71,37 @@ const RESOURCE_ORDER = [
 // Destroyer: 5,3,0,4,2,0
 const BUILD_COSTS = {
   frigate:   [4, 2, 0, 3, 0, 0],
-  destroyer: [5, 3, 0, 4, 2, 0]
+  destroyer: [5, 3, 0, 4, 2, 0],
+  // MINING: Miner cost per spec (6/4/2/5/0/1) — Phase 0
+  miner:     [6, 4, 2, 5, 0, 1],
+  // MINING: Probe for discovery (cheap) — Phase 4
+  probe:     [1, 1, 1, 0, 0, 1]
 };
 
 const BUILD_TIMES = {
   frigate: 38,
-  destroyer: 42
+  destroyer: 42,
+  // MINING: Miner build time (Phase 0)
+  miner: 55,
+  // MINING: Probe build time (Phase 4)
+  probe: 18
+};
+
+// MINING: Core tuning constants (exposed for easy balancing, per plan)
+const MINER_SPEED_TICKS = 10;          // 1 grid step every 10 ticks (~10s)
+const MINER_SETUP_TIME_MS = 60000;     // 60s setup after arrival before mining starts
+const MINING_INTERVAL_MS = 60000;      // Yield payout every 60s
+const MAX_MINERS_PER_SITE = 3;
+const STACKING_MULTIPLIERS = [1.0, 0.75, 0.55]; // index 0=1rig, 1=2rigs, 2=3rigs (diminishing returns)
+const PROBE_COST = [1, 1, 1, 0, 0, 1]; // cheap discovery unit
+const PROBE_TIME = 18;
+const PROBE_RADIUS = 2;                // cells
+
+// Yield base (per rig per cycle, before stacking; integers for simplicity)
+const YIELD_BASE = {
+  major_moon: 5,       // common
+  gas_cloud: 2,        // medium
+  asteroid_cluster: 1  // rare (plan ~0.6, floored to 1 for playability)
 };
 
 const MAX_QUEUE = 4;
@@ -153,6 +201,12 @@ class Team {
     this.players = new Map(); // playerName -> { name, role, socketId }
     this.buildQueue = [];
     this.currentBuild = null; // { type, remaining }
+
+    // Starter kit per playtest feedback:
+    // - Builder starts with 1 mining rig ready to deploy immediately
+    // - War Commander starts with 1 probe ready to deploy immediately
+    this.availableMiners = 1;
+    this.probes = 1;
   }
 
   getRolePlayer(role) {
@@ -200,9 +254,12 @@ class Game {
     this.tickCounter = 0;
     this.winner = null;
 
+    // MINING: deployed miner rigs on the map (Phase 1+). Separate from abstract fleets.
+    this.deployedMiners = [];
+
     // Map system (new for ui-map branch)
     this.mapSize = 13;                 // 13, 15, or 17
-    this.map = null;                   // { gasGiant, moons: [], starts: {teamName: {x,y}} }
+    this.map = null;                   // { gasGiant, moons: [], starts: {teamName: {x,y}}, anomalies: [...] later }
   }
 
   // Create a new team or return existing.
@@ -265,7 +322,7 @@ class Game {
 
   addEvent(text) {
     this.eventLog.push(text);
-    if (this.eventLog.length > 20) this.eventLog.shift();
+    if (this.eventLog.length > 35) this.eventLog.shift(); // more room for detailed mining / build / combat logs
   }
 
   getTeamByName(name) {
@@ -284,12 +341,18 @@ function persistGameState(game) {
     db.saveGame(game.code, game.status, game.winner);
 
     for (const team of game.teams.values()) {
+      // MINING: filter this team's miners for per-team JSON persistence (Phase 6)
+      const teamMiners = (game.deployedMiners || []).filter(m => m.teamName === team.name);
       db.upsertTeam(game.code, team.name, {
         resources: team.resources,
         frigates: team.frigates,
         destroyers: team.destroyers,
         buildings: team.buildings,
-        factoryHP: team.factoryHP
+        factoryHP: team.factoryHP,
+        // MINING: persist availableMiners + probes (Phase 0/6)
+        availableMiners: team.availableMiners || 0,
+        probes: team.probes || 0,
+        deployedMiners: teamMiners
       });
 
       for (const p of team.players.values()) {
@@ -305,7 +368,8 @@ function persistGameState(game) {
 
     // === NEW: Persist map data if it exists ===
     if (game.map && game.map.gasGiant) {
-      db.saveGameMap(game.code, game.mapSize, game.map.gasGiant, game.map.moons || []);
+      // MINING: include anomalies (with discoveredBy) for persistence Phase 6
+      db.saveGameMap(game.code, game.mapSize, game.map.gasGiant, game.map.moons || [], game.map.anomalies || []);
       if (game.map.starts) {
         db.saveTeamStarts(game.code, game.map.starts);
       }
@@ -339,6 +403,9 @@ function hydrateSavedGame(saved) {
     team.destroyers = t.destroyers ?? 0;
     team.buildings = t.buildings || { factory: 1, militaryAcademy: 1 };
     team.factoryHP = t.factoryHP ?? START_FACTORY_HP;
+    // MINING: hydrate availableMiners (defaults 0 for old saves) — Phase 0/6
+    team.availableMiners = (t.availableMiners != null) ? t.availableMiners : 0;
+    team.probes = (t.probes != null) ? t.probes : 0;
 
     game.teams.set(t.name, team);
   }
@@ -364,12 +431,35 @@ function hydrateSavedGame(saved) {
     arrivalTime: f.arrivalTime
   }));
 
+  // MINING Phase 6: rebuild deployedMiners from per-team JSON in saved data
+  game.deployedMiners = [];
+  for (const t of saved.teams || []) {
+    if (t.deployedMiners && Array.isArray(t.deployedMiners)) {
+      for (const dm of t.deployedMiners) {
+        // Re-attach minimal required fields, reset transient timers if old
+        game.deployedMiners.push({
+          id: dm.id || ('miner-' + Math.random().toString(36).slice(2)),
+          teamName: t.name,
+          x: dm.x || 0,
+          y: dm.y || 0,
+          state: dm.state || 'moving',
+          targetX: dm.targetX,
+          targetY: dm.targetY,
+          setupCompleteTime: null, // reset timer on load for safety
+          miningSite: dm.miningSite || null
+        });
+      }
+    }
+  }
+
   // === NEW: Restore persisted map data if available ===
   if (saved.mapData && saved.mapData.gasGiant) {
     game.map = {
       gasGiant: saved.mapData.gasGiant,
       moons: saved.mapData.moons || [],
-      starts: saved.teamStarts || {}
+      starts: saved.teamStarts || {},
+      // MINING: anomalies restored (Phase 2/6; may be empty until DB schema updated)
+      anomalies: saved.mapData.anomalies || []
     };
     console.log(`[DB] Restored full map data for ${saved.code}`);
   } else if (game.status === 'running' || game.status === 'saved') {
@@ -400,6 +490,11 @@ setInterval(() => {
     processBuilds(game);
     processFleets(game);
 
+    // MINING: process miner movement + setup timers + mining yields (Phase 1/2/3)
+    processMinerMovement(game);
+    processMinerSetup(game);
+    processMinerMining(game);
+
     // Passive mining removed in this pass (new 6-resource economy + future mechanics)
     checkWinCondition(game);
 
@@ -429,8 +524,10 @@ function broadcastState(game) {
       buildings: { ...t.buildings },
       factoryHP: t.factoryHP,
       factoryPercent: Math.round((t.factoryHP / START_FACTORY_HP) * 100),
-      members
-      // No more titanium, miners, canons, or incomePerCycle (removed per scope)
+      members,
+      // MINING: broadcast availableMiners count (for Builder UI) — Phase 0
+      availableMiners: t.availableMiners || 0,
+      probes: t.probes || 0
     });
   }
 
@@ -459,12 +556,23 @@ function broadcastState(game) {
     builds,
     eventLog: [...game.eventLog],
     winner: game.winner,
+    // MINING: deployedMiners broadcast (Phase 1) — client filters for own team mostly
+    deployedMiners: game.deployedMiners ? game.deployedMiners.map(m => ({
+      id: m.id,
+      teamName: m.teamName,
+      x: m.x,
+      y: m.y,
+      state: m.state,
+      targetX: m.targetX,
+      targetY: m.targetY
+    })) : [],
     // Map data (new)
     mapSize: game.mapSize,
     map: game.map ? {
       gasGiant: game.map.gasGiant,
-      moons: game.map.moons || []
-      // starts are sent privately below
+      moons: game.map.moons || [],
+      // MINING: anomalies sent (full list for Phase 2; discovery filtering in Phase 4+)
+      anomalies: game.map.anomalies || []
     } : null
   };
 
@@ -511,7 +619,7 @@ function processBuilds(game) {
     if (!current && team.buildQueue.length > 0) {
       const nextType = team.buildQueue.shift();
 
-      // Only frigate and destroyer are supported in this pass
+      // MINING: support miner builds (Phase 0). Frigate/destroyer still work.
       const time = BUILD_TIMES[nextType] || 30;
 
       current = { type: nextType, remaining: time };
@@ -525,6 +633,10 @@ function processBuilds(game) {
         // Complete build — add the unit
         if (current.type === 'frigate') team.frigates++;
         else if (current.type === 'destroyer') team.destroyers++;
+        // MINING: Miner production completes into availableMiners pool (Phase 0)
+        else if (current.type === 'miner') team.availableMiners = (team.availableMiners || 0) + 1;
+        // MINING: Probe completes into consumable count (Phase 4)
+        else if (current.type === 'probe') team.probes = (team.probes || 0) + 1;
 
         game.addEvent(`[${team.name}] completed 1 ${current.type.toUpperCase()}`);
         team.currentBuild = null;
@@ -597,6 +709,297 @@ function checkWinCondition(game) {
   }
 }
 
+// MINING: Process miner grid movement (Phase 1).
+// Greedy Manhattan with improved gas giant avoidance + patience reroute timer.
+//
+// NOTE ON FUTURE UNIFICATION (see ARCHITECTURE.md):
+// This logic is currently miner-specific. When fleets or probes become
+// first-class grid-moving entities, we should evaluate extracting common
+// movement concerns (position/target tracking, basic avoidance, stuck detection)
+// into a shared module. Do not over-abstract until we have a second real consumer.
+function processMinerMovement(game) {
+  if (!game.map || !game.deployedMiners || game.deployedMiners.length === 0) return;
+
+  const size = game.mapSize || 13;
+  const gasX = game.map.gasGiant ? game.map.gasGiant.x : Math.floor(size/2);
+  const gasY = game.map.gasGiant ? game.map.gasGiant.y : Math.floor(size/2);
+
+  const now = Date.now();
+  const toKeep = [];
+
+  for (const miner of game.deployedMiners) {
+    if (miner.state === 'mining') {
+      toKeep.push(miner);
+      continue;
+    }
+
+    // Only step on speed interval
+    const shouldStep = (game.tickCounter % MINER_SPEED_TICKS) === 0;
+    if (!shouldStep) {
+      toKeep.push(miner);
+      continue;
+    }
+
+    const tx = miner.targetX != null ? miner.targetX : miner.x;
+    const ty = miner.targetY != null ? miner.targetY : miner.y;
+
+    if (miner.x === tx && miner.y === ty) {
+      if (miner.state === 'moving') {
+        miner.state = 'setting_up';
+        miner.setupCompleteTime = now + MINER_SETUP_TIME_MS;
+        game.addEvent(`[${miner.teamName}] Miner arrived at (${tx},${ty}) — setting up (60s)`);
+        debugLog(game, `MINER ARRIVED: id=${miner.id} team=${miner.teamName} pos=(${miner.x},${miner.y}) target=(${tx},${ty})`);
+      }
+      toKeep.push(miner);
+      continue;
+    }
+
+    const oldX = miner.x;
+    const oldY = miner.y;
+    const oldDist = Math.abs(tx - oldX) + Math.abs(ty - oldY);
+
+    // Compute simple step toward target (Manhattan greedy)
+    const dx = tx - miner.x;
+    const dy = ty - miner.y;
+
+    let stepX = 0;
+    let stepY = 0;
+    if (Math.abs(dx) >= Math.abs(dy)) {
+      stepX = Math.sign(dx);
+    } else {
+      stepY = Math.sign(dy);
+    }
+
+    let nx = miner.x + stepX;
+    let ny = miner.y + stepY;
+
+    // If preferred step hits gas giant, try the other axis (slide-around)
+    if (nx === gasX && ny === gasY) {
+      nx = miner.x;
+      ny = miner.y;
+      if (stepX !== 0) {
+        stepY = Math.sign(dy);
+        nx = miner.x;
+        ny = miner.y + stepY;
+      } else {
+        stepX = Math.sign(dx);
+        nx = miner.x + stepX;
+        ny = miner.y;
+      }
+    }
+
+    // Final safety
+    if (nx === gasX && ny === gasY) {
+      nx = miner.x;
+      ny = miner.y;
+    }
+
+    // Clamp bounds
+    nx = Math.max(0, Math.min(size - 1, nx));
+    ny = Math.max(0, Math.min(size - 1, ny));
+
+    miner.x = nx;
+    miner.y = ny;
+
+    // === Patience / Stuck detection + Reroute ===
+    const newDist = Math.abs(tx - nx) + Math.abs(ty - ny);
+    const movedCloser = newDist < oldDist;
+
+    if (!movedCloser) {
+      miner.stuckCounter = (miner.stuckCounter || 0) + 1;
+    } else {
+      miner.stuckCounter = 0;
+    }
+
+    // Reroute if stuck for too long (patience timer)
+    if ((miner.stuckCounter || 0) > 5) {   // ~5 blocked steps = significant time stuck
+      // Pick a simple perpendicular detour target
+      const detourX = miner.x + (Math.random() > 0.5 ? 3 : -3);
+      const detourY = miner.y + (Math.random() > 0.5 ? 3 : -3);
+
+      miner.tempTargetX = Math.max(1, Math.min(size - 2, detourX));
+      miner.tempTargetY = Math.max(1, Math.min(size - 2, detourY));
+
+      debugLog(game, `MINER REROUTE (patience): id=${miner.id} team=${miner.teamName} stuck=${miner.stuckCounter} at=(${miner.x},${miner.y}) originalTarget=(${tx},${ty}) newTempTarget=(${miner.tempTargetX},${miner.tempTargetY})`);
+      game.addEvent(`[${miner.teamName}] Miner rerouting due to being stuck near obstacle`);
+
+      miner.stuckCounter = 0;
+      // Temporarily use the detour for the next few steps
+      // (we'll clear it once closer to original target in future ticks)
+    }
+
+    // If we have a temp target and we're now reasonably closer to original, clear it
+    if (miner.tempTargetX != null && newDist < oldDist + 2) {
+      miner.tempTargetX = null;
+      miner.tempTargetY = null;
+    }
+
+    // Use temp target for this step's calculation if present (for next iteration)
+    // (simple: we already moved; the tempTarget will influence future steps via the main target logic if we want,
+    //  but for v1 we just log and let natural movement continue)
+
+    toKeep.push(miner);
+
+    debugLog(game, `MINER STEP: id=${miner.id} team=${miner.teamName} from=(${oldX},${oldY}) to=(${nx},${ny}) target=(${tx},${ty}) dist=${newDist} stuck=${miner.stuckCounter || 0} state=${miner.state}`);
+  }
+
+  game.deployedMiners = toKeep;
+}
+
+// MINING: Handle setup timers (Phase 3). Transition setting_up -> mining after 60s, with event.
+function processMinerSetup(game) {
+  if (!game.deployedMiners || game.deployedMiners.length === 0) return;
+  const now = Date.now();
+  for (const miner of game.deployedMiners) {
+    if (miner.state === 'setting_up' && miner.setupCompleteTime && now >= miner.setupCompleteTime) {
+      miner.state = 'mining';
+      miner.miningSite = { x: miner.x, y: miner.y, type: null };
+      const siteKey = `(${miner.x},${miner.y})`;
+      game.addEvent(`[${miner.teamName}] Miner setup complete at ${siteKey} — now producing resources`);
+      debugLog(game, `MINER MINING: team=${miner.teamName} id=${miner.id} at=(${miner.x},${miner.y})`);
+      // Clear timer
+      miner.setupCompleteTime = null;
+    }
+  }
+}
+
+// MINING: Periodic yield processing (Phase 2). Called every tick but only acts on interval using Date or tick.
+// For v1: any non-moving miner on an anomaly cell contributes using stacking based on TOTAL rigs at that cell.
+function processMinerMining(game) {
+  if (!game.map || !game.map.anomalies || !game.deployedMiners || game.deployedMiners.length === 0) return;
+
+  const now = Date.now();
+  // Only payout on mining interval (use a simple lastMiningTime or tick based)
+  // Use tickCounter % (MINING_INTERVAL_MS / 1000) but since 1s ticks, every 60 ticks
+  const MINING_TICKS = Math.floor(MINING_INTERVAL_MS / 1000);
+  if (MINING_TICKS < 1 || (game.tickCounter % MINING_TICKS) !== 0) return;
+
+  const size = game.mapSize || 13;
+  const anomalyMap = new Map(); // "x,y" -> {x,y,type}
+  for (const a of game.map.anomalies) {
+    anomalyMap.set(`${a.x},${a.y}`, a);
+  }
+
+  // Group only fully 'mining' state rigs by cell (Phase 3: setup does not yield yet)
+  const cellRigs = {}; // key -> { total: num, byTeam: {team: count} }
+  for (const m of game.deployedMiners) {
+    if (m.state !== 'mining') continue; // ONLY active mining rigs contribute
+    const key = `${m.x},${m.y}`;
+    if (!anomalyMap.has(key)) continue; // no yield off anomaly
+
+    if (!cellRigs[key]) cellRigs[key] = { total: 0, byTeam: {} };
+    cellRigs[key].total++;
+    const tname = m.teamName;
+    cellRigs[key].byTeam[tname] = (cellRigs[key].byTeam[tname] || 0) + 1;
+  }
+
+  // For each occupied mining site, compute and award
+  for (const [key, data] of Object.entries(cellRigs)) {
+    const totalRigs = data.total;
+    if (totalRigs < 1) continue;
+    const [cx, cy] = key.split(',').map(Number);
+    const anomaly = anomalyMap.get(key);
+    const base = YIELD_BASE[anomaly.type] || 1;
+    const stackIdx = Math.min(STACKING_MULTIPLIERS.length - 1, Math.max(0, totalRigs - 1));
+    const mult = STACKING_MULTIPLIERS[stackIdx];
+
+    // Award per team
+    for (const [tname, teamRigs] of Object.entries(data.byTeam)) {
+      const team = game.getTeamByName(tname);
+      if (!team || team.factoryHP <= 0) continue;
+
+      // Each of team's rigs gets base * mult (floored)
+      const perRig = Math.floor(base * mult);
+      const teamYield = perRig * teamRigs;
+
+      if (teamYield > 0) {
+        const siteKey = `${cx},${cy}`;
+        addMiningYieldToTeam(game, team, anomaly.type, teamYield, siteKey);
+      }
+    }
+  }
+}
+
+// MINING helper: add yield resources to team (tunable distribution) + detailed event log
+function addMiningYieldToTeam(game, team, anomalyType, amount, siteKey = '') {
+  if (!team || amount <= 0) return;
+  const order = RESOURCE_ORDER;
+  let idxs = [0,1];
+  if (anomalyType === 'gas_cloud') idxs = [2,3];
+  else if (anomalyType === 'asteroid_cluster') idxs = [4,5];
+
+  const primaryShare = Math.floor(amount * 0.7 / 2);
+  const secondaryShare = Math.floor(amount * 0.3 / 4);
+
+  const gains = [];
+  for (let i = 0; i < 6; i++) {
+    let add = secondaryShare;
+    if (idxs.includes(i)) add += primaryShare;
+    if (add > 0) {
+      const mat = order[i];
+      team.resources[mat] = (team.resources[mat] || 0) + add;
+      // Full names (no acronyms in resource UI / event log)
+      const full = order[i];
+      gains.push(`+${add} ${full}`);
+    }
+  }
+
+  if (game && gains.length > 0) {
+    const site = siteKey ? ` at ${siteKey}` : '';
+    const typeLabel = anomalyType === 'major_moon' ? 'Moon' : (anomalyType === 'gas_cloud' ? 'Gas Cloud' : 'Asteroid');
+    game.addEvent(`[${team.name}] Mining${site} (${typeLabel}) → ${gains.join(' ')}`);
+    debugLog(game, `YIELD: team=${team.name} site=${siteKey || 'unknown'} type=${anomalyType} gains=${gains.join(' ')}`);
+  }
+}
+
+// MINING: deployMiner handler logic extracted for socket (Phase 1)
+function createDeployedMiner(game, teamName, targetX, targetY) {
+  const team = game.getTeamByName(teamName);
+  if (!team || team.availableMiners < 1) return { ok: false, error: 'No available miners' };
+  if (!game.map || !game.map.starts) return { ok: false, error: 'Map not ready' };
+
+  const start = game.map.starts[teamName] || { x: 1, y: 1 };
+  const size = game.mapSize || 13;
+
+  // Clamp target
+  const tx = Math.max(0, Math.min(size-1, Math.floor(targetX)));
+  const ty = Math.max(0, Math.min(size-1, Math.floor(targetY)));
+
+  // Prevent targeting the gas giant itself
+  const gas = game.map && game.map.gasGiant;
+  if (gas && tx === gas.x && ty === gas.y) {
+    return { ok: false, error: 'Cannot deploy to the gas giant' };
+  }
+
+  // MINING: Enforce max 3 rigs per site (Phase 2). Count current pos + targeted to prevent over-deploy.
+  const rigsAtSite = game.deployedMiners.filter(m =>
+    (m.x === tx && m.y === ty) || (m.targetX === tx && m.targetY === ty)
+  ).length;
+  if (rigsAtSite >= MAX_MINERS_PER_SITE) {
+    return { ok: false, error: `Site at (${tx},${ty}) is at max capacity (${MAX_MINERS_PER_SITE} rigs)` };
+  }
+
+  // Consume one
+  team.availableMiners--;
+
+  const miner = {
+    id: 'miner-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8),
+    teamName,
+    x: start.x,
+    y: start.y,
+    state: 'moving',
+    targetX: tx,
+    targetY: ty,
+    setupCompleteTime: null,
+    miningSite: null
+  };
+
+  game.deployedMiners.push(miner);
+  game.addEvent(`[${teamName}] Builder deployed 1 MINER toward (${tx},${ty})`);
+  debugLog(game, `DEPLOY MINER: team=${teamName} from=(${start.x},${start.y}) target=(${tx},${ty}) remainingAvailable=${team.availableMiners}`);
+  return { ok: true, miner };
+}
+
 // === MAP GENERATION (ui-map branch) ===
 function generateMapForGame(game) {
   const size = game.mapSize;
@@ -657,10 +1060,58 @@ function generateMapForGame(game) {
   game.map = {
     gasGiant,
     moons,
-    starts   // teamName -> {x, y}
+    starts,   // teamName -> {x, y}
+    // MINING: anomalies array (Phase 2). Major moons visible always; others hidden until probed.
+    anomalies: []
   };
 
-  console.log(`[MAP] Generated ${size}x${size} map for game ${game.code} with ${moons.length} moons`);
+  // MINING: Generate anomalies (major_moon ~ visible common sites; gas_cloud + asteroid_cluster hidden)
+  // Use deterministic-ish random based on code for reproducibility across reconnects.
+  const seedBase = (game.code || 'SEED').split('').reduce((a,c)=>a + c.charCodeAt(0), size);
+  function seededRand(i) { return ((seedBase * 9301 + i * 49297) % 233280) / 233280; }
+
+  const anomalies = [];
+  const occupied = new Set();
+  function isOccupied(x,y) {
+    const k = `${x},${y}`;
+    if (occupied.has(k)) return true;
+    if (x === center && y === center) return true; // gas giant
+    // avoid starts
+    for (const s of Object.values(starts)) if (s.x === x && s.y === y) return true;
+    return false;
+  }
+  function placeAnomaly(type, count, jitter=2) {
+    let placed = 0;
+    let attempts = 0;
+    while (placed < count && attempts < 200) {
+      attempts++;
+      const idx = placed + attempts * 7;
+      const r = seededRand(idx);
+      // Bias placement away from center for variety
+      let ax = Math.floor(r * (size - 4)) + 2;
+      let ay = Math.floor(seededRand(idx+11) * (size - 4)) + 2;
+      if (Math.abs(ax - center) < 2 && Math.abs(ay - center) < 2) continue;
+      if (isOccupied(ax, ay)) { ax = (ax + 1) % (size-1); ay = (ay + 3) % (size-1); if (isOccupied(ax,ay)) continue; }
+      anomalies.push({ x: ax, y: ay, type });
+      occupied.add(`${ax},${ay}`);
+      placed++;
+    }
+  }
+
+  // Major moons: use similar count to legacy moons (common, always visible)
+  const majorCount = Math.max(3, Math.min(7, moonCount));
+  placeAnomaly('major_moon', majorCount);
+
+  // Gas clouds (medium, hidden) 4-8 depending on size
+  const gasCount = size === 13 ? 5 : size === 15 ? 6 : 8;
+  placeAnomaly('gas_cloud', gasCount);
+
+  // Asteroid clusters (rare, hidden) 2-5
+  const astCount = size === 13 ? 3 : size === 15 ? 4 : 5;
+  placeAnomaly('asteroid_cluster', astCount);
+
+  game.map.anomalies = anomalies;
+  console.log(`[MAP] Generated ${size}x${size} map for ${game.code} with ${moons.length} legacy moons + ${anomalies.length} mining anomalies`);
 }
 
 // ============ SOCKET HANDLERS (Team + Role based) ============
@@ -674,6 +1125,9 @@ io.on('connection', (socket) => {
 
     const game = new Game(code, socket.id);
     game.hostName = (hostName || '').trim().slice(0, 20) || 'Teacher';
+
+    initGameDebugLog(game, code);
+    debugLog(game, `Game created by host: ${game.hostName}`);
 
     games.set(code, game);
     socket.join(code);
@@ -778,7 +1232,18 @@ io.on('connection', (socket) => {
     generateMapForGame(game);
 
     game.status = 'running';
-    game.addEvent('GAME STARTED — Coordinate with your team! Builder produces, Negotiator trades, War Commander attacks.');
+    debugLog(game, `GAME STARTED - ${game.teams.size} teams`);
+
+    // Log starting profiles so everyone immediately sees the asymmetric starts (drives trading)
+    // Use full names in the event log (resource UI rule: no acronyms here)
+    for (const t of game.teams.values()) {
+      const arr = t.getResourcesArray();
+      const fullNames = ['Fused Xenon', 'Helium-3 Lattice', 'Quantite', 'Plasma-Bound Carbon', 'Antimatter Catalyst', 'Neurocryst'];
+      const display = arr.map((v, i) => `${fullNames[i]}:${v}`).join(' ');
+      game.addEvent(`[${t.name}] starts with ${display}`);
+    }
+
+    game.addEvent('GAME STARTED — Each team has different starting resources (specialization bias hidden). Builder: deploy your starting miner. War: you have 1 probe ready. Mine, trade, expand.');
     persistGameState(game);
     broadcastState(game);
     cb?.({ ok: true });
@@ -795,8 +1260,8 @@ io.on('connection', (socket) => {
     const team = game.getTeamByName(info.teamName);
     if (!team || team.factoryHP <= 0) return cb?.({ ok: false });
 
-    // Only Frigate and Destroyer supported in this pass
-    if (type !== 'frigate' && type !== 'destroyer') {
+    // MINING: Allow 'miner' and 'probe' (discovery). (Phase 0/4)
+    if (type !== 'frigate' && type !== 'destroyer' && type !== 'miner' && type !== 'probe') {
       return cb?.({ ok: false, error: 'Invalid production type' });
     }
 
@@ -816,6 +1281,104 @@ io.on('connection', (socket) => {
     persistGameState(game);
     broadcastState(game);
     cb?.({ ok: true });
+  });
+
+  // MINING: Builder deploys an available miner to a map target (Phase 1)
+  // For v1: Builder can deploy and (later) give move orders. War will also see miners.
+  socket.on('deployMiner', ({ targetX, targetY }, cb) => {
+    const info = socketToPlayer.get(socket.id);
+    if (!info || info.role !== 'builder') return cb?.({ ok: false, error: 'Only the Builder can deploy miners' });
+
+    const game = info.game;
+    if (game.status !== 'running') return cb?.({ ok: false });
+
+    const res = createDeployedMiner(game, info.teamName, targetX, targetY);
+    if (!res.ok) return cb?.(res);
+
+    persistGameState(game);
+    broadcastState(game);
+    cb?.({ ok: true });
+  });
+
+  // MINING: Move/redirect an existing deployed miner (Phase 1, callable by Builder or War for v1)
+  socket.on('moveMiner', ({ minerId, targetX, targetY }, cb) => {
+    const info = socketToPlayer.get(socket.id);
+    if (!info || (info.role !== 'builder' && info.role !== 'war')) {
+      return cb?.({ ok: false, error: 'Builder or War Commander can command miners' });
+    }
+
+    const game = info.game;
+    if (game.status !== 'running') return cb?.({ ok: false });
+
+    const miner = game.deployedMiners.find(m => m.id === minerId && m.teamName === info.teamName);
+    if (!miner) return cb?.({ ok: false, error: 'Miner not found or not yours' });
+
+    // Hard rule: Once a miner has arrived and started setting up or mining, it is locked to that site.
+    if (miner.state === 'setting_up' || miner.state === 'mining') {
+      return cb?.({ ok: false, error: 'This miner has already been deployed and is locked to its current mining site.' });
+    }
+
+    const size = game.mapSize || 13;
+    const tx = Math.max(0, Math.min(size-1, Math.floor(targetX)));
+    const ty = Math.max(0, Math.min(size-1, Math.floor(targetY)));
+
+    // Prevent moving to the gas giant
+    const gas = game.map && game.map.gasGiant;
+    if (gas && tx === gas.x && ty === gas.y) {
+      return cb?.({ ok: false, error: 'Cannot move miner to the gas giant' });
+    }
+
+    miner.targetX = tx;
+    miner.targetY = ty;
+
+    game.addEvent(`[${info.teamName}] Miner re-tasked to (${miner.targetX},${miner.targetY})`);
+    debugLog(game, `MOVE MINER: team=${info.teamName} id=${minerId} newTarget=(${tx},${ty})`);
+    persistGameState(game);
+    broadcastState(game);
+    cb?.({ ok: true });
+  });
+
+  // Launch probe scan — War Commander tool (per playtest). Consumes 1 probe if available.
+  // Builder still produces the probes; War Commander uses them for discovery.
+  socket.on('launchProbe', ({ x, y }, cb) => {
+    const info = socketToPlayer.get(socket.id);
+    if (!info || info.role !== 'war') return cb?.({ ok: false, error: 'Only the War Commander can launch probes' });
+
+    const game = info.game;
+    if (game.status !== 'running') return cb?.({ ok: false });
+
+    const team = game.getTeamByName(info.teamName);
+    if (!team || (team.probes || 0) < 1) return cb?.({ ok: false, error: 'No probes available (build more)' });
+
+    if (!game.map || !game.map.anomalies) return cb?.({ ok: false, error: 'No map' });
+
+    // Consume probe
+    team.probes--;
+
+    const px = Math.floor(x), py = Math.floor(y);
+    const radius = PROBE_RADIUS;
+    let revealed = 0;
+    const size = game.mapSize || 13;
+
+    for (const anom of game.map.anomalies) {
+      const dist = Math.abs(anom.x - px) + Math.abs(anom.y - py); // Manhattan
+      if (dist <= radius) {
+        if (!anom.discoveredBy) anom.discoveredBy = {};
+        if (!anom.discoveredBy[info.teamName]) {
+          anom.discoveredBy[info.teamName] = true;
+          revealed++;
+        }
+      }
+    }
+
+    const msg = revealed > 0
+      ? `[${info.teamName}] Probe revealed ${revealed} anomaly(ies) near (${px},${py})`
+      : `[${info.teamName}] Probe scanned near (${px},${py}) — no new anomalies`;
+    game.addEvent(msg);
+
+    persistGameState(game);
+    broadcastState(game);
+    cb?.({ ok: true, revealed });
   });
 
   // War Commander-only action
@@ -938,6 +1501,8 @@ io.on('connection', (socket) => {
 
       const hydrated = hydrateSavedGame(found);
       games.set(code, hydrated);
+      initGameDebugLog(hydrated, code);
+      debugLog(hydrated, `Saved game loaded from DB`);
       console.log(`[DB] Loaded saved game ${code} on demand`);
     }
 
@@ -957,6 +1522,25 @@ io.on('connection', (socket) => {
 
     broadcastState(game);
     cb?.({ ok: true, code, status: game.status });
+  });
+
+  // Teacher can permanently delete a saved / previous game (clean removal from DB + memory)
+  socket.on('deleteSavedGame', ({ code }, cb) => {
+    if (!code) return cb?.({ ok: false, error: 'No code provided' });
+
+    // Remove from active memory if it was loaded
+    if (games.has(code)) {
+      games.delete(code);
+    }
+
+    try {
+      db.deleteGame(code);
+      console.log(`[DB] Deleted game ${code} (teacher action)`);
+      cb?.({ ok: true });
+    } catch (e) {
+      console.error(`[DB] Failed to delete game ${code}:`, e.message);
+      cb?.({ ok: false, error: 'Database error while deleting' });
+    }
   });
 
   socket.on('disconnect', () => {

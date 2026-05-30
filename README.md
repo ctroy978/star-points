@@ -81,6 +81,10 @@ Each player is one solar system with:
 ## Files
 - `server.js` — all game logic, timers, combat resolution
 - `public/index.html` — the entire terminal-style client (CSS + JS)
+- `ARCHITECTURE.md` — notes on current structure and development guidelines (important for ongoing work)
+
+## Development Note
+As the game grows, we are gradually introducing better separation of logic while preserving the "no build step" experience that makes it easy to run in classrooms. See `ARCHITECTURE.md` for the current soft rule we follow when adding new features.
 
 Enjoy watching your students negotiate, backstab, and do math under pressure!
 

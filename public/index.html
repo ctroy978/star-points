@@ -122,7 +122,7 @@
     font-family: inherit; padding: 4px 6px; font-size: 13px;
   }
   .log {
-    height: 130px; overflow-y: auto;
+    height: 168px; overflow-y: auto;
     background: #050505; border: 1px solid #222;
     padding: 5px 7px; font-size: 12px; white-space: pre-wrap;
   }
@@ -443,6 +443,23 @@
               Future: Admiral Schools (Builder production). Every fleet requires one. Name of fleet = Admiral's name.
             </div>
 
+            <!-- PROBES — War Commander discovery / scouting asset (per playtest) -->
+            <div style="margin:6px 0 4px; padding:4px 6px; background:#001122; border:1px solid #003366; font-size:11px;">
+              <div style="display:flex; justify-content:space-between; align-items:center;">
+                <span><strong>PROBES</strong> <span style="font-size:9px;color:#006633;">(War Commander)</span></span>
+                <span id="war-probes" class="big-number" style="font-size:20px; color:#66ccff;">0</span>
+              </div>
+              <div style="margin-top:3px;">
+                <button class="btn" onclick="startProbeCommandFromWar()" 
+                        style="border-color:#66ccff; color:#66ccff; font-size:13px; padding:5px 12px; width:100%;">
+                  LAUNCH PROBE TO MAP LOCATION
+                </button>
+              </div>
+              <div style="font-size:8px; color:#006633; margin-top:2px;">
+                Click button → go to Map → click target cell → confirm. Build more via Builder.
+              </div>
+            </div>
+
             <div id="war-assets-disabled" class="disabled-note hidden">View only — you are not the War Commander</div>
 
             <!-- Demo helpers for prototype testing (clearly labeled) -->
@@ -574,15 +591,51 @@
             <div id="resource-balances" style="font-size:12px; line-height:1.5; display:grid; grid-template-columns:1fr 1fr; gap:2px 12px;"></div>
           </div>
 
+          <!-- MINING: Available (undeployed) Miners count (Phase 0) — prominent for Builder -->
+          <div class="panel" style="margin:0 0 6px 0; padding:6px 8px; background:#0a2200; border-color:#004422;">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+              <span style="font-size:12px;"><strong>AVAILABLE MINERS</strong> <span style="font-size:9px;color:#006633;">(ready to deploy)</span></span>
+              <span id="builder-available-miners" class="big-number" style="font-size:22px; color:#66ffaa;">0</span>
+            </div>
+            <div style="font-size:9px; color:#006633; margin-top:2px;">Build more in queue above. Deploy from Map tab or later controls.</div>
+          </div>
+
+          <!-- NEW COMMAND FLOW (per user request): Button lives on Builder page -->
+          <div class="panel" style="margin:0 0 6px 0; padding:6px 8px; background:#001a0a; border-color:#003322;">
+            <div style="font-size:12px; margin-bottom:4px;"><strong>MINER RIGS</strong></div>
+
+            <div style="margin-bottom:6px;">
+              <button class="btn" onclick="startMinerCommandFromBuilder()"
+                      style="font-size:14px; padding:6px 16px; width:100%;">
+                DIRECT A MINER RIG TO MAP LOCATION
+              </button>
+            </div>
+
+            <div style="font-size:10px; color:#006633; line-height:1.3;">
+              Click the button above → you will be taken to the Map.<br>
+              Click the destination cell → confirm the order.<br>
+              The rig will begin moving.
+            </div>
+
+            <div id="builder-miner-command-status" style="font-size:10px; color:#66ffaa; margin-top:4px;"></div>
+          </div>
+
+          <!-- Probes moved to War Commander (per playtest). Builder still produces them via queue. -->
+
           <!-- Production buttons with exact costs from prompt -->
           <div class="panel" style="margin:0 0 6px 0; padding:6px 8px;">
             <div style="margin:4px 0;">
               <button class="btn btn-small" onclick="queueBuild('frigate')" style="margin-bottom:4px;">
-                + FRIGATE (4 FX, 2 H3, 3 PBC — 38s)
+                + FRIGATE (4 Fused Xenon, 2 Helium-3 Lattice, 3 Plasma-Bound Carbon — 38s)
               </button><br>
               <button class="btn btn-small" onclick="queueBuild('destroyer')">
-                + DESTROYER (5 FX, 3 H3, 4 PBC, 2 AC — 42s)
+                + DESTROYER (5 Fused Xenon, 3 Helium-3 Lattice, 4 Plasma-Bound Carbon, 2 Antimatter Catalyst — 42s)
               </button>
+              <!-- MINING: Miner production button (Phase 0) -->
+              <br><button class="btn btn-small" onclick="queueBuild('miner')">
+                + MINER (6 Fused Xenon, 4 Helium-3 Lattice, 2 Quantite, 5 Plasma-Bound Carbon, 1 Neurocryst — 55s)
+              </button>
+              <!-- Probe production: Builder builds for the team; War Commander launches (playtest feedback) -->
             </div>
             <div id="build-disabled" class="disabled-note hidden">View only — you are not the Builder</div>
           </div>
@@ -604,7 +657,14 @@
             <!-- Grid is built dynamically by renderMap() -->
           </div>
           <div style="font-size:10px; color:#006633; margin-top:6px; text-align:center;">
-            Non-interactive • Gas giant at center • Your starting location shown only to your team
+            Anomalies: ◉ Major Moon (common) • ☁ Gas Cloud • ◆ Asteroid (rare). Miners=M.
+          </div>
+
+          <!-- MINING Phase 5: Deployed Miners summary + move controls (visible to team).
+               Note: MOVE is only available for miners still en route (state = moving). Once setting_up/mining they are locked. -->
+          <div id="my-miners-panel" class="panel" style="margin-top:6px; padding:5px 6px; font-size:10px; background:#0a0a0a;">
+            <div style="margin-bottom:3px;"><strong>MY DEPLOYED MINERS</strong> <span style="color:#006633">(click [MOVE] then map cell)</span></div>
+            <div id="my-miners-list" style="min-height:18px; max-height:70px; overflow:auto;"></div>
           </div>
         </div>
       </div>
@@ -658,6 +718,10 @@ let myRole = null;           // 'war' | 'negotiator' | 'builder'
 let isHost = false;
 let lastState = null;
 let selectedMapSize = 13;    // Default for host map selection
+
+// MINING: interactive map state for Phase 5
+let selectedMinerId = null;   // for move orders
+let mapClickMode = null;      // 'deploy' | 'move' | null
 
 // === WAR FLEET PROTOTYPE STATE (client-side only design simulation) ===
 // Holds locally commissioned fleets for the current browser session.
@@ -854,6 +918,10 @@ function transferTi(amount) {
   });
 }
 
+// Mining deployment logic has been extracted to public/client/mining-deployment.js
+// per the soft architectural rule (see ARCHITECTURE.md).
+// This keeps the main file smaller and begins proper separation of concerns.
+
 function endGame() {
   if (!confirm('End the game for everyone?')) return;
   socket.emit('endGame');
@@ -901,6 +969,7 @@ function refreshSavedGamesList() {
         <strong>${g.code}</strong> — ${statusLabel} — ${g.mapSize}×${g.mapSize}<br>
         <span style="font-size:10px;">${g.teamCount} teams, ${g.playerCount} players</span>
         <button class="btn btn-small" style="margin-left:8px;" onclick="loadSavedGame('${g.code}')">LOAD</button>
+        <button class="btn btn-small btn-danger" style="margin-left:3px;" onclick="deleteSavedGame('${g.code}')">DELETE</button>
       `;
       container.appendChild(div);
     });
@@ -928,6 +997,19 @@ function loadSavedGame(code) {
     el('lobby-code').textContent = currentCode;
     el('game-code').textContent = 'CODE: ' + currentCode;
     el('game-status').textContent = 'LOADED SAVED GAME — ' + (res.status || '').toUpperCase();
+  });
+}
+
+function deleteSavedGame(code) {
+  if (!confirm(`Permanently DELETE game ${code}?\n\nThis removes ALL data for this game from the database and cannot be undone.`)) return;
+
+  socket.emit('deleteSavedGame', { code }, (res) => {
+    if (!res || !res.ok) {
+      alert(res?.error || 'Failed to delete game');
+      return;
+    }
+    // Refresh the list so the deleted game disappears immediately
+    refreshSavedGamesList();
   });
 }
 
@@ -992,6 +1074,7 @@ function render(state) {
     hide('game-screen');
     hide('game-over');
     myPrototypeWarFleets = []; // clear prototype design state between games
+    selectedMinerId = null; mapClickMode = null;
     show('lobby-screen');
     renderLobby(state);
     return;
@@ -1004,6 +1087,7 @@ function render(state) {
     hide('game-screen');
     show('game-over');
     myPrototypeWarFleets = []; // clear prototype design state
+    selectedMinerId = null; mapClickMode = null;
     const banner = el('winner-banner');
     banner.textContent = state.winner ? '★ ' + state.winner + ' WINS ★' : 'GAME OVER';
     banner.style.borderColor = state.winner ? 'var(--green)' : 'var(--red)';
@@ -1036,6 +1120,9 @@ function render(state) {
 
   const canControl = !isPureHost; // pure host can never control
 
+  // Find my team data early so it can be used throughout the render (including early gating logic)
+  const myTeamData = state.teams.find(t => t.name === state.myTeam) || {};
+
   // War section (expanded for new Ready Assets + Fleet Assembly prototype)
   el('btn-attack').disabled = !(canControl && isWar);
   el('attack-target').disabled = !(canControl && isWar);
@@ -1061,13 +1148,13 @@ function render(state) {
   buildBtns.forEach(b => b.disabled = !(canControl && isBuilder));
   if (isBuilder && !isPureHost) hide('build-disabled'); else show('build-disabled');
 
+  // Old manual deploy-x/y panel has been removed (deprecated in favor of command-system flow:
+  // Button on role tab → map → click destination → confirm).
+
   // Extra note for pure host
   if (isPureHost) {
     document.querySelectorAll('.disabled-note').forEach(el => el.textContent = 'View only — you are the Host (no role)');
   }
-
-  // Find my team data
-  const myTeamData = state.teams.find(t => t.name === state.myTeam) || {};
 
   // War Commander asset visibility — now includes Capitol + Admirals + clear Total vs Available
   if (typeof renderReadyAssets === 'function') {
@@ -1086,8 +1173,18 @@ function render(state) {
 
   // Negotiator tab currently read-only (trading out of scope for this pass)
 
-  // Builder — render all 6 resources with labels (short names for space)
+  // Builder — render all 6 resources with full names (acronyms reserved for future map pop-ups)
   renderResourceBalances(myTeamData);
+
+  // MINING: show availableMiners in Builder panel (Phase 0)
+  const minerCountEl = el('builder-available-miners');
+  if (minerCountEl) {
+    minerCountEl.textContent = (myTeamData.availableMiners != null) ? myTeamData.availableMiners : 0;
+  }
+
+  // Probes (War Commander asset per playtest; visible to whole team)
+  const warProbeEl = el('war-probes');
+  if (warProbeEl) warProbeEl.textContent = (myTeamData.probes != null) ? myTeamData.probes : 0;
 
   // Other teams (for trading + attack targets)
   renderOtherTeams(state.teams, state.myTeam);
@@ -1103,6 +1200,9 @@ function render(state) {
 
   // Map (dynamic, supports 13/15/17)
   renderMap(state);
+
+  // MINING Phase 5: my miners list + interaction polish
+  if (typeof renderMyMiners === 'function') renderMyMiners(state);
 
   // Event log
   renderEventLog(state.eventLog);
@@ -1570,22 +1670,45 @@ function updateAssemblyGating() {
 }
 
 // Render the 6 resources for the Builder (exact order from prompt)
+// Always shows all 6 materials with FULL NAMES (no acronyms) in the main resource UI.
+// Acronyms are reserved only for future map pop-up displays (per requirements).
 function renderResourceBalances(teamData) {
   const container = el('resource-balances');
   if (!container) return;
 
-  if (!teamData || !teamData.resources) {
-    container.innerHTML = '<span style="color:#006633">No resource data</span>';
-    return;
+  const resourceNames = [
+    'Fused Xenon',
+    'Helium-3 Lattice',
+    'Quantite',
+    'Plasma-Bound Carbon',
+    'Antimatter Catalyst',
+    'Neurocryst'
+  ];
+
+  let html = '';
+
+  if (teamData && Array.isArray(teamData.resourcesArray)) {
+    for (let i = 0; i < 6; i++) {
+      const label = resourceNames[i];
+      const val = teamData.resourcesArray[i] ?? 0;
+      html += `<div><span style="color:#006633">${label}:</span> <strong>${val}</strong></div>`;
+    }
+  } else if (teamData && teamData.resources && typeof teamData.resources === 'object') {
+    // Fallback using known order if resourcesArray is missing
+    const order = resourceNames;
+    for (let i = 0; i < 6; i++) {
+      const label = order[i];
+      const val = teamData.resources[label] ?? 0;
+      html += `<div><span style="color:#006633">${label}:</span> <strong>${val}</strong></div>`;
+    }
+  } else {
+    // No data yet (very early game or pure host) — still show the labels at 0
+    for (let i = 0; i < 6; i++) {
+      const label = resourceNames[i];
+      html += `<div><span style="color:#006633">${label}:</span> <strong>0</strong></div>`;
+    }
   }
 
-  const short = ['FX', 'H3', 'Q', 'PBC', 'AC', 'N'];
-  let html = '';
-  for (let i = 0; i < 6; i++) {
-    const label = short[i];
-    const val = teamData.resourcesArray ? teamData.resourcesArray[i] : (teamData.resources[Object.keys(teamData.resources)[i]] || 0);
-    html += `<div><span style="color:#006633">${label}:</span> <strong>${val}</strong></div>`;
-  }
   container.innerHTML = html;
 }
 
@@ -1595,9 +1718,9 @@ function renderEventLog(logLines) {
   (logLines || []).forEach(line => {
     const div = document.createElement('div');
     div.className = 'log-line';
-    if (line.includes('DESTROYED') || line.includes('attacked')) div.classList.add('log-attack');
-    else if (line.includes('completed') || line.includes('transferred') || line.includes('queued')) div.classList.add('log-good');
-    else if (line.includes('STARTED') || line.includes('Mining') || line.includes('cycle')) div.classList.add('log-system');
+    if (line.includes('DESTROYED') || line.includes('attacked') || line.includes('eliminated')) div.classList.add('log-attack');
+    else if (line.includes('completed') || line.includes('transferred') || line.includes('queued') || line.includes('Mining') || line.includes('yield') || line.includes('→')) div.classList.add('log-good');
+    else if (line.includes('STARTED') || line.includes('setup') || line.includes('deployed') || line.includes('revealed') || line.includes('Probe') || line.includes('Miner')) div.classList.add('log-system');
     div.textContent = line;
     log.appendChild(div);
   });
@@ -1638,6 +1761,26 @@ function renderMap(state) {
 
   const gasGiant = mapData.gasGiant || { x: Math.floor(size/2), y: Math.floor(size/2) };
   const moons = mapData.moons || [];
+  // MINING: anomalies (Phase 2+). Filter hidden for this team (Phase 4 discovery)
+  const myTeamForDisc = state.myTeam;
+  const rawAnomalies = mapData.anomalies || [];
+  const anomalies = rawAnomalies.filter(a => {
+    if (a.type === 'major_moon') return true; // always visible
+    const db = a.discoveredBy || {};
+    return !!(myTeamForDisc && db[myTeamForDisc]);
+  });
+
+  // MINING: my team's deployed miners for Phase 1 rendering (simple markers)
+  const myMiners = (state.deployedMiners || []).filter(m => m.teamName === state.myTeam);
+  // Quick lookup: cell key "x,y" -> count of miners (for v1 badge)
+  const minerCounts = {};
+  myMiners.forEach(m => {
+    const k = `${m.x},${m.y}`;
+    minerCounts[k] = (minerCounts[k] || 0) + 1;
+  });
+  const anomalyAt = {};
+  // Use filtered for drawing, but also keep raw for probe? Use filtered here.
+  anomalies.forEach(a => { anomalyAt[`${a.x},${a.y}`] = a; });
 
   for (let row = 0; row < size; row++) {
     // Row label (1, 2, 3...)
@@ -1672,6 +1815,86 @@ function renderMap(state) {
         cell.style.fontSize = '12px';
       }
 
+      // MINING: draw anomaly symbols if present at cell (Phase 2). Priority over basic moons.
+      const cellKeyForAnom = `${col},${row}`;
+      const anom = anomalyAt[cellKeyForAnom];
+      if (anom && !isGasGiant && !isMyStart) {
+        if (anom.type === 'major_moon') {
+          cell.textContent = '◉';
+          cell.style.color = '#00ff9f';
+          cell.style.fontSize = '14px';
+          cell.style.background = '#0a2200';
+          cell.title = 'Major Moon (common yields)';
+        } else if (anom.type === 'gas_cloud') {
+          cell.textContent = '☁';
+          cell.style.color = '#66ccff';
+          cell.style.fontSize = '13px';
+          cell.style.background = '#001122';
+          cell.title = 'Gas Cloud (medium yields — may need probe)';
+        } else if (anom.type === 'asteroid_cluster') {
+          cell.textContent = '◆';
+          cell.style.color = '#ffaa66';
+          cell.style.fontSize = '12px';
+          cell.style.background = '#221100';
+          cell.title = 'Asteroid Cluster (rare yields — may need probe)';
+        }
+      }
+
+      // MINING: overlay own miners on cell (Phase 1+). Color by state (Phase 3).
+      const cellKey = `${col},${row}`;
+      if (minerCounts[cellKey]) {
+        const cnt = minerCounts[cellKey];
+        // Find states for visual (simple: if any mining use green)
+        const minersHere = myMiners.filter(m => m.x === col && m.y === row);
+        const hasMining = minersHere.some(m => m.state === 'mining');
+        const hasSetup = minersHere.some(m => m.state === 'setting_up');
+        cell.textContent = cnt > 1 ? `M${cnt}` : (hasMining ? 'M★' : 'M');
+        cell.style.color = hasMining ? '#66ffaa' : (hasSetup ? '#ffcc33' : '#aaffcc');
+        cell.style.fontSize = cnt > 1 ? '10px' : '12px';
+        cell.style.background = hasMining ? '#003322' : '#002211';
+        const states = minersHere.map(m => m.state).join(',');
+        cell.title = cnt + ' miner(s) here — ' + states;
+      }
+
+      // MINING Phase 5: make interactive for Builder deploy (if has available) or selected miner move
+      const isBuilderWithMiners = (state.myRole === 'builder') && ((state.teams || []).find(t => t.name === state.myTeam)?.availableMiners || 0) > 0;
+      const hasMoveTarget = !!selectedMinerId;
+
+      // New command system: also show crosshair when a command is pending
+      const inCommandMode = (typeof isInCommandMode === 'function') && isInCommandMode();
+
+      if ((hasMoveTarget || isBuilderWithMiners || inCommandMode) && !isGasGiant) {
+        cell.style.cursor = 'crosshair';
+        cell.style.pointerEvents = 'auto';
+        cell.onclick = (e) => {
+          e.stopPropagation();
+
+          // NEW COMMAND SYSTEM (preferred path)
+          if (typeof isInCommandMode === 'function' && isInCommandMode() &&
+              typeof handleMapCellCommandClick === 'function') {
+            const handled = handleMapCellCommandClick(col, row);
+            if (handled) return; // command system took care of it (including confirmation)
+          }
+
+          // Legacy path (still supported for now)
+          if (selectedMinerId) {
+            // Move selected
+            socket.emit('moveMiner', { minerId: selectedMinerId, targetX: col, targetY: row }, (res) => {
+              if (res && !res.ok && res.error) alert('Move: ' + res.error);
+              selectedMinerId = null; mapClickMode = null;
+              if (lastState) render(lastState);
+            });
+          } else if (isBuilderWithMiners) {
+            // Deploy
+            socket.emit('deployMiner', { targetX: col, targetY: row }, (res) => {
+              if (res && !res.ok && res.error) alert('Deploy: ' + res.error);
+            });
+          }
+        };
+      } else {
+        cell.style.pointerEvents = 'auto';
+      }
+
       wrapper.appendChild(cell);
     }
   }
@@ -1679,11 +1902,115 @@ function renderMap(state) {
   container.appendChild(wrapper);
 }
 
+// MINING Phase 5: render list of own deployed miners with move buttons (interactive)
+function renderMyMiners(state) {
+  const container = el('my-miners-list');
+  if (!container) return;
+
+  const myMs = (state.deployedMiners || []).filter(m => m.teamName === state.myTeam);
+  if (myMs.length === 0) {
+    container.innerHTML = '<span style="color:#006633;">No miners deployed yet.</span>';
+    selectedMinerId = null;
+    return;
+  }
+
+  let html = '';
+  myMs.forEach(m => {
+    const isSel = selectedMinerId === m.id;
+    const stateLabel = m.state === 'mining' ? '⛏' : (m.state === 'setting_up' ? '⏳' : '→');
+    html += `<span style="display:inline-block; margin:1px 3px; padding:1px 3px; border:1px solid ${isSel?'#ffcc33':'#003322'}; background:#111;">`;
+    const coordLabel = (typeof formatMapCoord === 'function') 
+      ? formatMapCoord(m.x, m.y) 
+      : `(${m.x},${m.y})`;
+    html += `${stateLabel} @${coordLabel} [${m.state}] `;
+
+    // Only allow moving miners that are still en route. Once setting_up or mining, they are locked to the site.
+    if (m.state === 'moving') {
+      html += `<button class="btn btn-small" style="padding:0 3px; font-size:9px;" onclick="selectMinerForMove('${m.id}')">MOVE</button>`;
+    } else {
+      html += `<span style="color:#664400; font-size:8px;">(locked)</span>`;
+    }
+
+    if (isSel) html += ` <span style="color:#ffcc33;">(click map cell)</span>`;
+    html += `</span> `;
+  });
+  container.innerHTML = html;
+}
+
+function selectMinerForMove(minerId) {
+  // Extra safety: only allow moving miners that are still 'moving'
+  const miner = (lastState?.deployedMiners || []).find(m => m.id === minerId);
+  if (miner && miner.state !== 'moving') {
+    alert('This miner has already been deployed and cannot be moved.');
+    return;
+  }
+
+  selectedMinerId = minerId;
+  mapClickMode = 'move';
+  // Re-render to update highlights
+  if (lastState) render(lastState);
+  // Temporary note
+  const note = el('deploy-miner-status');
+  if (note) {
+    note.textContent = 'Click any map cell to choose destination';
+    setTimeout(() => { if (note) note.textContent = ''; }, 4000);
+  }
+}
+
+// Enhance renderMap to also handle move clicks when a miner selected
+// (we augment the cell onclicks if in move mode - done by patching after initial build in render)
+function enableMapMoveClicks(state) {
+  // After renderMap has run, we can walk cells and override for move mode
+  // Simpler: since cells rebuilt, we attach extra logic in a post-pass (called from render after map)
+  const container = el('map-container');
+  if (!container || !selectedMinerId || mapClickMode !== 'move') return;
+
+  // Find cells and attach move handler (cells are deep)
+  const cells = container.querySelectorAll('.map-cell');
+  cells.forEach(cell => {
+    // Parse position from ? Hard without data attrs. Use a global last render positions or attach via closure in original.
+    // For practicality in single file: on click anywhere in map container when in move mode, but better use event delegation.
+  });
+}
+
+// Simple delegation: listen once for map clicks for move/deploy advanced
+// We'll attach a one-time smarter handler on the container in render when needed.
+function setupMapInteractionDelegation(state) {
+  const container = el('map-container');
+  if (!container) return;
+  // Remove old
+  container.onclick = null;
+
+  const hasSelectedMove = selectedMinerId && mapClickMode === 'move';
+  const myTeamData = (state.teams || []).find(t => t.name === state.myTeam) || {};
+  const canDeployClick = (state.myRole === 'builder') && (myTeamData.availableMiners || 0) > 0;
+
+  if (hasSelectedMove || canDeployClick) {
+    container.style.cursor = hasSelectedMove ? 'crosshair' : 'default';
+    container.onclick = function(ev) {
+      // Find which cell was clicked by walking parents or use coordinate calc (simple grid approx)
+      // Since dynamic grid, use bounding + math hard. Instead rely on per-cell onclicks we set for deploy.
+      // For move: if selected, emit move to a guessed cell? For full polish we enhance cell creation.
+      // Practical compromise: if move mode, clicking the whole map area is ambiguous. Use the existing per-cell for deploy.
+      // To deliver: when move selected, the per-cell onclicks in renderMap will be overridden below? 
+      // Rebuild: the cell onclick we set can check global selectedMinerId
+    };
+  }
+}
+
 // ===== TAB SYSTEM (feature/ui-map) =====
 let currentTab = 'war';
 
 function switchTab(tab) {
+  const previousTab = currentTab;
   currentTab = tab;
+
+  // If user manually leaves the map while a command was pending, cancel it
+  if (previousTab === 'map' && tab !== 'map' &&
+      typeof isInCommandMode === 'function' && isInCommandMode() &&
+      typeof cancelCommandMode === 'function') {
+    cancelCommandMode();
+  }
 
   // Update button active states
   document.querySelectorAll('.tab-button').forEach(btn => {
@@ -1739,5 +2066,10 @@ setTimeout(() => {
 
 console.log('%c[STAR POINT] Team-based client ready', 'color:#006633');
 </script>
+
+<!-- Separated client logic (start of modularization per ARCHITECTURE.md soft rule) -->
+<script src="/client/mining-deployment.js"></script>
+<script src="/client/command-system.js"></script>
+
 </body>
 </html>
