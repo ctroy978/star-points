@@ -80,11 +80,21 @@ function initDb() {
   // Safe upgrade: add map_size column if missing (for existing databases)
   try {
     db.exec(`ALTER TABLE games ADD COLUMN map_size INTEGER DEFAULT 13`);
-  } catch (e) {
-    // Column already exists or other harmless error
+  } catch (e) {}
+
+  // Safe upgrades for the new 6-resource system (add columns if they don't exist)
+  const upgrades = [
+    `ALTER TABLE teams ADD COLUMN resources_json TEXT`,
+    `ALTER TABLE teams ADD COLUMN frigates INTEGER DEFAULT 0`,
+    `ALTER TABLE teams ADD COLUMN destroyers INTEGER DEFAULT 0`,
+    `ALTER TABLE teams ADD COLUMN buildings_json TEXT`,
+    `ALTER TABLE fleets ADD COLUMN frigates INTEGER DEFAULT 0`
+  ];
+  for (const sql of upgrades) {
+    try { db.exec(sql); } catch (e) {}
   }
 
-  console.log('[DB] Initialized starpoint.db');
+  console.log('[DB] Initialized starpoint.db (6-resource schema ready)');
   return db;
 }
 
@@ -139,10 +149,10 @@ function loadAllGames() {
       mapSize: g.map_size || 13,
       teams: teams.map(t => ({
         name: t.name,
-        titanium: t.titanium,
-        miners: t.miners,
-        fighters: t.fighters,
-        canons: t.canons,
+        resources: t.resources_json ? JSON.parse(t.resources_json) : null,
+        frigates: t.frigates ?? 0,
+        destroyers: t.destroyers ?? 0,
+        buildings: t.buildings_json ? JSON.parse(t.buildings_json) : null,
         factoryHP: t.factory_hp
       })),
       players: players.map(p => ({
@@ -153,11 +163,12 @@ function loadAllGames() {
       fleets: fleets.map(f => ({
         from: f.from_team,
         to: f.to_team,
-        fighters: f.fighters,
+        frigates: f.frigates ?? f.fighters ?? 0,
+        fighters: f.fighters, // legacy
         arrivalTime: f.arrival_time
       })),
-      mapData,           // { gasGiant, moons }
-      teamStarts: starts // { teamName: {x,y} }
+      mapData,
+      teamStarts: starts
     });
   }
   return result;
@@ -172,22 +183,27 @@ function deleteGame(code) {
 
 function upsertTeam(gameCode, teamName, initialData = {}) {
   const stmt = getDb().prepare(`
-    INSERT INTO teams (game_code, name, titanium, miners, fighters, canons, factory_hp)
+    INSERT INTO teams (
+      game_code, name,
+      resources_json, frigates, destroyers, buildings_json,
+      factory_hp
+    )
     VALUES (?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(game_code, name) DO UPDATE SET
-      titanium = excluded.titanium,
-      miners = excluded.miners,
-      fighters = excluded.fighters,
-      canons = excluded.canons,
+      resources_json = excluded.resources_json,
+      frigates = excluded.frigates,
+      destroyers = excluded.destroyers,
+      buildings_json = excluded.buildings_json,
       factory_hp = excluded.factory_hp
   `);
+
   stmt.run(
     gameCode,
     teamName,
-    initialData.titanium ?? 100,
-    initialData.miners ?? 0,
-    initialData.fighters ?? 0,
-    initialData.canons ?? 0,
+    initialData.resources ? JSON.stringify(initialData.resources) : null,
+    initialData.frigates ?? 0,
+    initialData.destroyers ?? 0,
+    initialData.buildings ? JSON.stringify(initialData.buildings) : null,
     initialData.factoryHP ?? 100
   );
 }

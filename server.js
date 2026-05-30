@@ -30,23 +30,47 @@ const ROLE_LABELS = {
   builder: 'Builder'
 };
 
-const START_TITANIUM = 120;
 const START_FACTORY_HP = 100;
 
-const MINER_COST = 30;
-const MINER_TIME = 45;      // seconds - produces passive income
-const FIGHTER_COST = 20;
-const FIGHTER_TIME = 30;
-const CANON_COST = 10;
-const CANON_TIME = 60;
+// === CORE 6-RESOURCE SYSTEM (exact per fixed prompt) ===
+// Materials in this exact order for all costs and arrays:
+const RESOURCE_ORDER = [
+  'Fused Xenon',
+  'Helium-3 Lattice',
+  'Quantite',
+  'Plasma-Bound Carbon',
+  'Antimatter Catalyst',
+  'Neurocryst'
+];
 
-const BASE_PASSIVE = 5;
-const MINER_PASSIVE = 3;    // +3 Ti per miner every cycle
-const PASSIVE_INTERVAL_TICKS = 15;   // every 15 seconds
+// Build costs (Frigate and Destroyer) using exact order above.
+// Frigate: 4,2,0,3,0,0
+// Destroyer: 5,3,0,4,2,0
+const BUILD_COSTS = {
+  frigate:   [4, 2, 0, 3, 0, 0],
+  destroyer: [5, 3, 0, 4, 2, 0]
+};
 
-const TRAVEL_TIME = 8;               // seconds for fleets
-const FIGHTER_DAMAGE = 7;            // per survivor to factory
+const BUILD_TIMES = {
+  frigate: 38,
+  destroyer: 42
+};
+
 const MAX_QUEUE = 4;
+
+// Typical base ranges (midpoint used for base before variance + bias)
+const RESOURCE_BASE_RANGES = {
+  'Fused Xenon':         { min: 14, max: 22 },
+  'Helium-3 Lattice':    { min: 10, max: 16 },
+  'Quantite':            { min: 5,  max: 9  },
+  'Plasma-Bound Carbon': { min: 3,  max: 7  },
+  'Antimatter Catalyst': { min: 1,  max: 4  },
+  'Neurocryst':          { min: 0,  max: 2  }
+};
+
+// Legacy combat constants kept minimal (war scope reduced for this pass)
+const TRAVEL_TIME = 8;               // seconds for fleets
+const FRIGATE_DAMAGE = 7;            // per survivor (no more Defense Canon interception)
 
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no confusing chars
 
@@ -64,15 +88,68 @@ function generateCode() {
   return code;
 }
 
-// Team data structure (shared resources + 3 role players)
+// Generate starting 6-resource profile for one team.
+// Implements the exact rules from the fixed prompt:
+// - Base from given typical ranges
+// - ±15-25% variance per material
+// - One specialization bias per team (+30-40% on one random material)
+// - Different profiles across teams to force trading
+function generateStartingResources(teamIndex, totalTeams) {
+  const resources = {};
+
+  // Base = midpoint of the given typical range for 4-8 teams
+  const base = {};
+  for (const mat of RESOURCE_ORDER) {
+    const r = RESOURCE_BASE_RANGES[mat];
+    base[mat] = Math.round((r.min + r.max) / 2);
+  }
+
+  // Slight global scarcity scaling with more teams (encourages trading)
+  const scarcityFactor = Math.max(0.75, 1 - (totalTeams - 2) * 0.06);
+
+  // Choose this team's specialization (different preference per team when possible)
+  const specIndex = teamIndex % RESOURCE_ORDER.length;
+  const specializedMat = RESOURCE_ORDER[specIndex];
+
+  for (const mat of RESOURCE_ORDER) {
+    let val = base[mat] * scarcityFactor;
+
+    // ±15-25% random variance
+    const variance = 0.15 + Math.random() * 0.10; // 15% to 25%
+    const sign = Math.random() < 0.5 ? -1 : 1;
+    val = val * (1 + sign * variance);
+
+    // Apply specialization bias (30-40% higher) to one material for this team
+    if (mat === specializedMat) {
+      const bias = 0.30 + Math.random() * 0.10; // 30-40%
+      val = val * (1 + bias);
+    }
+
+    // Final integer, never negative
+    resources[mat] = Math.max(0, Math.round(val));
+  }
+
+  return resources;
+}
+
+// Team data structure — 6-resource economy + starting infrastructure
+// (old Titanium / miners / canons / fighters completely removed)
 class Team {
-  constructor(name) {
+  constructor(name, teamIndex = 0, totalTeams = 2) {
     this.name = name;
-    this.titanium = START_TITANIUM;
-    this.miners = 0;
-    this.fighters = 0;
-    this.canons = 0;
+
+    // Exactly 6 resources in RESOURCE_ORDER
+    this.resources = generateStartingResources(teamIndex, totalTeams);
+
+    // New military units only (Frigate + Destroyer). Defense Canon fully removed.
+    this.frigates = 0;
+    this.destroyers = 0;
+
+    // Starting infrastructure (per prompt)
+    this.buildings = { factory: 1, militaryAcademy: 1 };
+
     this.factoryHP = START_FACTORY_HP;
+
     this.players = new Map(); // playerName -> { name, role, socketId }
     this.buildQueue = [];
     this.currentBuild = null; // { type, remaining }
@@ -88,6 +165,28 @@ class Team {
   isFull() {
     return this.players.size >= TEAM_SIZE;
   }
+
+  // Return resources as array in fixed RESOURCE_ORDER (useful for UI + deduction)
+  getResourcesArray() {
+    return RESOURCE_ORDER.map(mat => this.resources[mat] || 0);
+  }
+
+  // Check if team can afford a cost array (same length/order as RESOURCE_ORDER)
+  canAfford(costArray) {
+    const current = this.getResourcesArray();
+    for (let i = 0; i < costArray.length; i++) {
+      if (current[i] < costArray[i]) return false;
+    }
+    return true;
+  }
+
+  // Deduct a cost array when production starts
+  deduct(costArray) {
+    for (let i = 0; i < RESOURCE_ORDER.length; i++) {
+      const mat = RESOURCE_ORDER[i];
+      this.resources[mat] = Math.max(0, (this.resources[mat] || 0) - (costArray[i] || 0));
+    }
+  }
 }
 
 class Game {
@@ -99,7 +198,6 @@ class Game {
     this.fleets = [];                  // in-transit
     this.eventLog = [];
     this.tickCounter = 0;
-    this.lastIncomeTick = 0;
     this.winner = null;
 
     // Map system (new for ui-map branch)
@@ -107,10 +205,13 @@ class Game {
     this.map = null;                   // { gasGiant, moons: [], starts: {teamName: {x,y}} }
   }
 
-  // Create a new team or return existing
+  // Create a new team or return existing.
+  // New teams get varied starting resources using the bias + variance rules.
   getOrCreateTeam(teamName) {
     if (!this.teams.has(teamName)) {
-      const team = new Team(teamName);
+      const teamIndex = this.teams.size;                    // 0-based for this new team
+      const totalTeams = Math.max(2, this.teams.size + 1);  // reasonable estimate for scarcity
+      const team = new Team(teamName, teamIndex, totalTeams);
       this.teams.set(teamName, team);
       return team;
     }
@@ -184,10 +285,10 @@ function persistGameState(game) {
 
     for (const team of game.teams.values()) {
       db.upsertTeam(game.code, team.name, {
-        titanium: team.titanium,
-        miners: team.miners,
-        fighters: team.fighters,
-        canons: team.canons,
+        resources: team.resources,
+        frigates: team.frigates,
+        destroyers: team.destroyers,
+        buildings: team.buildings,
         factoryHP: team.factoryHP
       });
 
@@ -199,7 +300,7 @@ function persistGameState(game) {
     // Replace fleets for this game (simple approach)
     db.clearFleetsForGame(game.code);
     for (const f of game.fleets) {
-      db.addFleet(game.code, f.from, f.to, f.fighters, f.arrivalTime);
+      db.addFleet(game.code, f.from, f.to, f.frigates ?? f.fighters ?? 0, f.arrivalTime);
     }
 
     // === NEW: Persist map data if it exists ===
@@ -225,14 +326,20 @@ function hydrateSavedGame(saved) {
   game.winner = saved.winner || null;
   game.mapSize = saved.mapSize || 13;
 
-  // Rebuild teams
+  // Rebuild teams with new 6-resource model (graceful for any old saved data)
   for (const t of saved.teams) {
-    const team = new Team(t.name);
-    team.titanium = t.titanium;
-    team.miners = t.miners;
-    team.fighters = t.fighters;
-    team.canons = t.canons;
-    team.factoryHP = t.factoryHP;
+    const teamIndex = game.teams.size;
+    const totalTeams = Math.max(2, game.teams.size + 1);
+    const team = new Team(t.name, teamIndex, totalTeams);
+
+    if (t.resources && typeof t.resources === 'object') {
+      team.resources = { ...t.resources };
+    }
+    team.frigates = t.frigates ?? t.fighters ?? 0;
+    team.destroyers = t.destroyers ?? 0;
+    team.buildings = t.buildings || { factory: 1, militaryAcademy: 1 };
+    team.factoryHP = t.factoryHP ?? START_FACTORY_HP;
+
     game.teams.set(t.name, team);
   }
 
@@ -248,12 +355,12 @@ function hydrateSavedGame(saved) {
     }
   }
 
-  // Rebuild fleets
+  // Rebuild fleets (support legacy key during transition)
   game.fleets = saved.fleets.map(f => ({
     id: Date.now() + Math.random(),
     from: f.from,
     to: f.to,
-    fighters: f.fighters,
+    frigates: f.frigates ?? f.fighters ?? 0,
     arrivalTime: f.arrivalTime
   }));
 
@@ -293,12 +400,7 @@ setInterval(() => {
     processBuilds(game);
     processFleets(game);
 
-    // Passive mining (now benefits from miners)
-    if ((game.tickCounter - game.lastIncomeTick) >= PASSIVE_INTERVAL_TICKS) {
-      givePassiveIncome(game);
-      game.lastIncomeTick = game.tickCounter;
-    }
-
+    // Passive mining removed in this pass (new 6-resource economy + future mechanics)
     checkWinCondition(game);
 
     // Broadcast + persist
@@ -320,22 +422,23 @@ function broadcastState(game) {
 
     teams.push({
       name: t.name,
-      titanium: t.titanium,
-      miners: t.miners,
-      fighters: t.fighters,
-      canons: t.canons,
+      resources: { ...t.resources },           // full 6-resource object
+      resourcesArray: t.getResourcesArray(),   // ordered array for easy UI
+      frigates: t.frigates,
+      destroyers: t.destroyers,
+      buildings: { ...t.buildings },
       factoryHP: t.factoryHP,
       factoryPercent: Math.round((t.factoryHP / START_FACTORY_HP) * 100),
-      members,
-      incomePerCycle: BASE_PASSIVE + (t.miners * MINER_PASSIVE)
+      members
+      // No more titanium, miners, canons, or incomePerCycle (removed per scope)
     });
   }
 
-  // Fleets with ETAs
+  // Fleets with ETAs (frigates only in this pass)
   const fleets = game.fleets.map(f => ({
     from: f.from,
     to: f.to,
-    fighters: f.fighters,
+    frigates: f.frigates ?? f.fighters ?? 0,
     eta: Math.max(1, Math.ceil((f.arrivalTime - Date.now()) / 1000))
   }));
 
@@ -407,10 +510,9 @@ function processBuilds(game) {
 
     if (!current && team.buildQueue.length > 0) {
       const nextType = team.buildQueue.shift();
-      let time;
-      if (nextType === 'miner') time = MINER_TIME;
-      else if (nextType === 'fighter') time = FIGHTER_TIME;
-      else time = CANON_TIME;
+
+      // Only frigate and destroyer are supported in this pass
+      const time = BUILD_TIMES[nextType] || 30;
 
       current = { type: nextType, remaining: time };
       team.currentBuild = current;
@@ -420,10 +522,9 @@ function processBuilds(game) {
     if (current) {
       current.remaining--;
       if (current.remaining <= 0) {
-        // Complete build
-        if (current.type === 'miner') team.miners++;
-        else if (current.type === 'fighter') team.fighters++;
-        else team.canons++;
+        // Complete build — add the unit
+        if (current.type === 'frigate') team.frigates++;
+        else if (current.type === 'destroyer') team.destroyers++;
 
         game.addEvent(`[${team.name}] completed 1 ${current.type.toUpperCase()}`);
         team.currentBuild = null;
@@ -450,29 +551,27 @@ function resolveCombat(game, fleet) {
   const attackerTeam = game.getTeamByName(fleet.from);
   const defenderTeam = game.getTeamByName(fleet.to);
 
-  const originalCount = fleet.fighters;
+  const originalCount = fleet.frigates ?? fleet.fighters ?? 0;
 
   if (!defenderTeam || defenderTeam.factoryHP <= 0) {
     if (attackerTeam && attackerTeam.factoryHP > 0) {
-      attackerTeam.fighters += originalCount;
+      attackerTeam.frigates += originalCount;
     }
     game.addEvent(`Fleet from ${fleet.from} returned safely (${fleet.to} already destroyed)`);
     return;
   }
 
-  const canons = defenderTeam.canons || 0;
-  const killed = Math.min(originalCount, canons);
-  const survivors = originalCount - killed;
-  const damage = survivors * FIGHTER_DAMAGE;
+  // Defense Canon fully removed per prompt — no interception in this pass
+  const survivors = originalCount;
+  const damage = survivors * FRIGATE_DAMAGE;
 
   defenderTeam.factoryHP = Math.max(0, defenderTeam.factoryHP - damage);
 
   let msg = `${fleet.from} attacked ${fleet.to} with ${originalCount} FTR. `;
-  if (killed > 0) msg += `${killed} shot down. `;
   if (survivors > 0) {
     msg += `${survivors} hit for ${damage} damage`;
     if (attackerTeam && attackerTeam.factoryHP > 0) {
-      attackerTeam.fighters += survivors;
+      attackerTeam.frigates += survivors;
       msg += ` — ${survivors} returned.`;
     } else {
       msg += ` (attacker eliminated, survivors lost).`;
@@ -481,22 +580,6 @@ function resolveCombat(game, fleet) {
     msg += `All destroyed, no damage.`;
   }
   game.addEvent(msg);
-
-  // Killing blow bonus
-  if (defenderTeam.factoryHP <= 0 && attackerTeam && attackerTeam.factoryHP > 0) {
-    attackerTeam.titanium += 25;
-    game.addEvent(`${fleet.from} DESTROYED ${fleet.to}'s factory! (+25 Ti bonus)`);
-  }
-}
-
-function givePassiveIncome(game) {
-  for (const team of game.teams.values()) {
-    if (team.factoryHP > 0) {
-      const income = BASE_PASSIVE + (team.miners * MINER_PASSIVE);
-      team.titanium += income;
-    }
-  }
-  game.addEvent(`Mining cycle complete — all teams received passive income`);
 }
 
 function checkWinCondition(game) {
@@ -712,11 +795,21 @@ io.on('connection', (socket) => {
     const team = game.getTeamByName(info.teamName);
     if (!team || team.factoryHP <= 0) return cb?.({ ok: false });
 
-    const cost = (type === 'miner') ? MINER_COST : (type === 'fighter') ? FIGHTER_COST : CANON_COST;
-    if (team.titanium < cost) return cb?.({ ok: false, error: 'Not enough titanium' });
-    if (team.buildQueue.length >= MAX_QUEUE) return cb?.({ ok: false, error: 'Queue full (max 4)' });
+    // Only Frigate and Destroyer supported in this pass
+    if (type !== 'frigate' && type !== 'destroyer') {
+      return cb?.({ ok: false, error: 'Invalid production type' });
+    }
 
-    team.titanium -= cost;
+    const cost = BUILD_COSTS[type];
+    if (!team.canAfford(cost)) {
+      return cb?.({ ok: false, error: 'Not enough resources' });
+    }
+    if (team.buildQueue.length >= MAX_QUEUE) {
+      return cb?.({ ok: false, error: 'Queue full (max 4)' });
+    }
+
+    // Deduct the exact multi-resource cost when production starts (per prompt)
+    team.deduct(cost);
     team.buildQueue.push(type);
 
     game.addEvent(`[${info.teamName}] Builder queued 1 ${type.toUpperCase()}`);
@@ -739,16 +832,16 @@ io.on('connection', (socket) => {
     if (!attacker || !defender) return cb?.({ ok: false });
     if (info.teamName === targetTeam) return cb?.({ ok: false });
     if (attacker.factoryHP <= 0 || defender.factoryHP <= 0) return cb?.({ ok: false });
-    if (numFighters < 1 || numFighters > attacker.fighters) return cb?.({ ok: false });
+    if (numFighters < 1 || numFighters > attacker.frigates) return cb?.({ ok: false });
 
-    attacker.fighters -= numFighters;
+    attacker.frigates -= numFighters;
 
     const arrivalTime = Date.now() + (TRAVEL_TIME * 1000);
     game.fleets.push({
       id: Date.now() + Math.random(),
       from: info.teamName,
       to: targetTeam,
-      fighters: numFighters,
+      frigates: numFighters,
       arrivalTime
     });
 
@@ -758,29 +851,9 @@ io.on('connection', (socket) => {
     cb?.({ ok: true });
   });
 
-  // Negotiator-only action
+  // Negotiator-only action — disabled in this resource-system pass (trading not implemented)
   socket.on('transferTi', ({ targetTeam, amount }, cb) => {
-    const info = socketToPlayer.get(socket.id);
-    if (!info || info.role !== 'negotiator') return cb?.({ ok: false, error: 'Only the Negotiator can transfer titanium' });
-
-    const game = info.game;
-    if (game.status !== 'running') return cb?.({ ok: false });
-
-    const sender = game.getTeamByName(info.teamName);
-    const receiver = game.getTeamByName(targetTeam);
-
-    if (!sender || !receiver || info.teamName === targetTeam) return cb?.({ ok: false });
-    if (sender.factoryHP <= 0 || receiver.factoryHP <= 0) return cb?.({ ok: false });
-    if (![10, 25, 50].includes(amount)) return cb?.({ ok: false });
-    if (sender.titanium < amount) return cb?.({ ok: false });
-
-    sender.titanium -= amount;
-    receiver.titanium += amount;
-
-    game.addEvent(`[${info.teamName}] Negotiator transferred ${amount} Ti to ${targetTeam}`);
-    persistGameState(game);
-    broadcastState(game);
-    cb?.({ ok: true });
+    return cb?.({ ok: false, error: 'Trading not available in this build (resource foundation pass)' });
   });
 
   socket.on('endGame', (cb) => {
