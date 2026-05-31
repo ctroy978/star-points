@@ -116,6 +116,7 @@
   .btn-danger { border-color: var(--red); color: var(--red); }
   .btn-danger:hover { background: var(--red); color: #000; }
   .btn-small { padding: 2px 6px; font-size: 11px; }
+  .btn-tiny { padding: 0 3px; font-size: 9px; line-height: 1; }
   input, select {
     background: #000; color: var(--green);
     border: 1px solid var(--green-dim);
@@ -631,7 +632,10 @@
               <span style="font-size:12px;"><strong>AVAILABLE MINERS</strong> <span style="font-size:9px;color:#006633;">(ready to deploy)</span></span>
               <span id="builder-available-miners" class="big-number" style="font-size:22px; color:#66ffaa;">0</span>
             </div>
-            <div style="font-size:9px; color:#006633; margin-top:2px;">Build more in queue above. Direct deployment &amp; movement from the Map tab (team-wide).</div>
+            <div style="font-size:9px; color:#006633; margin-top:2px;">Build more in queue above. Use the "VIEW MAP" button below for deployment.</div>
+            <button class="btn btn-small" onclick="deployAvailableMiner()" style="margin-top:6px; width:100%; font-size:11px;">
+              DEPLOY MINER TO MAP
+            </button>
           </div>
 
           <!-- Miner deployment is now Map-centric (not controlled from Builder UI).
@@ -641,28 +645,64 @@
 
           <!-- Production buttons with exact costs from prompt -->
           <div class="panel" style="margin:0 0 6px 0; padding:6px 8px;">
-            <div style="margin:4px 0;">
-              <button class="btn btn-small" onclick="queueBuild('frigate')" style="margin-bottom:4px;">
-                + FRIGATE (4 Fused Xenon, 2 Helium-3 Lattice, 3 Plasma-Bound Carbon — 38s)
+            
+            <!-- Military Production -->
+            <div style="margin-bottom:8px;">
+              <div style="font-size:10px; color:#ffaa66; margin-bottom:2px;"><strong>MILITARY PRODUCTION</strong></div>
+              <button class="btn btn-small" onclick="queueBuild('frigate')" title="Costs: 4 Fused Xenon, 2 Helium-3 Lattice, 0 Quantite, 3 Plasma-Bound Carbon, 0 Antimatter Catalyst, 0 Neurocryst" style="margin-bottom:3px;">
+                + FRIGATE (fast attack craft)
               </button><br>
-              <button class="btn btn-small" onclick="queueBuild('destroyer')">
-                + DESTROYER (5 Fused Xenon, 3 Helium-3 Lattice, 4 Plasma-Bound Carbon, 2 Antimatter Catalyst — 42s)
-              </button>
-              <!-- MINING: Miner production button (Phase 0) -->
-              <br><button class="btn btn-small" onclick="queueBuild('miner')">
-                + MINER (6 Fused Xenon, 4 Helium-3 Lattice, 2 Quantite, 5 Plasma-Bound Carbon, 1 Neurocryst — 55s)
-              </button>
-              <!-- Probe production: Builder builds for the team; War Commander launches (playtest feedback) -->
-              <br><button class="btn btn-small" onclick="queueBuild('probe')">
-                + PROBE (1 Fused Xenon, 1 Helium-3 Lattice, 1 Quantite — 18s)
+              <button class="btn btn-small" onclick="queueBuild('destroyer')" title="Costs: 5 Fused Xenon, 3 Helium-3 Lattice, 0 Quantite, 4 Plasma-Bound Carbon, 2 Antimatter Catalyst, 0 Neurocryst">
+                + DESTROYER (heavy combat ship)
               </button>
             </div>
-            <div id="build-disabled" class="disabled-note hidden">View only — you are not the Builder</div>
+
+            <!-- Support & Infrastructure -->
+            <div>
+              <div style="font-size:10px; color:#66ccff; margin-bottom:2px;"><strong>SUPPORT &amp; INFRASTRUCTURE</strong></div>
+              
+              <!-- MINING: Miner production button (Phase 0) -->
+              <button class="btn btn-small" onclick="queueBuild('miner')" title="Costs: 6 Fused Xenon, 4 Helium-3 Lattice, 2 Quantite, 5 Plasma-Bound Carbon, 0 Antimatter Catalyst, 1 Neurocryst" style="margin-bottom:3px;">
+                + MINER (extracts resources from anomalies)
+              </button><br>
+              
+              <!-- Probe production -->
+              <button class="btn btn-small" onclick="queueBuild('probe')" title="Costs: 1 Fused Xenon, 1 Helium-3 Lattice, 1 Quantite, 0 Plasma-Bound Carbon, 0 Antimatter Catalyst, 0 Neurocryst" style="margin-bottom:3px;">
+                + PROBE (fast reconnaissance — reveals hidden anomalies)
+              </button><br>
+              
+              <!-- Factory Kit -->
+              <button class="btn btn-small" onclick="queueBuild('factory')" title="Costs: 22 Fused Xenon, 16 Helium-3 Lattice, 10 Quantite, 14 Plasma-Bound Carbon, 8 Antimatter Catalyst, 6 Neurocryst" style="margin-bottom:3px;">
+                + FACTORY KIT (very expensive — deploy to moons for extra build queue + synthesis)
+              </button><br>
+              
+              <!-- Admiral -->
+              <button class="btn btn-small" onclick="queueBuild('admiral')" title="Costs: 10 Fused Xenon, 7 Helium-3 Lattice, 5 Quantite, 6 Plasma-Bound Carbon, 4 Antimatter Catalyst, 3 Neurocryst" style="margin-bottom:3px;">
+                + ADMIRAL (produced at home Military Academy — required for fleets)
+              </button><br>
+              
+              <!-- Capitol Ship -->
+              <button class="btn btn-small" onclick="queueBuild('capitol')" title="Costs: 35 Fused Xenon, 24 Helium-3 Lattice, 15 Quantite, 20 Plasma-Bound Carbon, 12 Antimatter Catalyst, 9 Neurocryst">
+                + CAPITOL SHIP (command vessel — forms and leads fleets)
+              </button>
+            </div>
+
+            <div style="font-size:9px; color:#666; margin-top:6px;">(Open browser console (F12) to see [BUILDER] logs on click)</div>
           </div>
 
           <div class="panel" style="margin:0; padding:6px 8px;">
             <div class="panel-title">PRODUCTION QUEUES (one per operational factory)</div>
             <div id="build-status" style="min-height:42px; font-size:12px;"></div>
+          </div>
+
+          <!-- Easy access to map for deployment and viewing -->
+          <div class="panel" style="margin-top:8px; padding:6px 8px; text-align:center; background:#001a0a; border-color:#004422;">
+            <button class="btn" onclick="switchTab('map')" style="width:100%; font-size:13px; padding:8px;">
+              VIEW / INTERACT WITH THE MAP
+            </button>
+            <div style="font-size:9px; color:#006633; margin-top:4px;">
+              Deploy miners, watch probes &amp; synthesis targets, see moon movement
+            </div>
           </div>
         </div>
       </div>
@@ -675,6 +715,10 @@
           </div>
           <div class="map-container" id="map-container">
             <!-- Grid is built dynamically by renderMap() -->
+          </div>
+          <div style="font-size:10px; color:#006633; margin-top:8px; text-align:center; border:1px dashed #003322; padding:4px;">
+            <strong>Tip:</strong> Use this tab to deploy miners (click DEPLOY MINER button from Builder tab first), watch probes move, and see moon orbits.<br>
+            If the map is blank, check the browser console (F12) for errors.
           </div>
           <div style="font-size:10px; color:#006633; margin-top:6px; text-align:center;">
             Moons: ◉ Large • ○ Small. ☁ Gas • ◆ Asteroid. Miners=M. ✧ = Active Probe (fast, temporary snapshot).
@@ -721,6 +765,7 @@
 <script>
 // ============== CLIENT LOGIC (Team + Role Edition) ==============
 const socket = io();
+window.socket = socket;  // Expose for extracted client modules and debugging
 
 // IMPORTANT: Students should only use the main URL (/).
 // Teachers use /host to access creation and host controls.
@@ -806,8 +851,9 @@ function configurePageForRole() {
 configurePageForRole();
 
 function el(id) { return document.getElementById(id); }
-function show(id) { el(id).classList.remove('hidden'); }
-function hide(id) { el(id).classList.add('hidden'); }
+function safeEl(id) { return document.getElementById(id) || { classList: { add(){}, remove(){} }, disabled: false, textContent: '' }; }
+function show(id) { const e = el(id); if (e) e.classList.remove('hidden'); }
+function hide(id) { const e = el(id); if (e) e.classList.add('hidden'); }
 
 function logEvent(text, cls = '') {
   const log = el('event-log');
@@ -905,24 +951,56 @@ function startGame() {
 }
 
 function queueBuild(type) {
-  // Warning when Builder tries to build non-miner items with no active mining rigs
-  if (type !== 'miner' && lastState && lastState.myTeam) {
-    const myMiners = (lastState.deployedMiners || []).filter(m =>
-      m.teamName === lastState.myTeam &&
-      (m.state === 'mining' || m.state === 'setting_up')
-    );
+  console.log('[BUILDER] queueBuild called with type:', type, 'lastState?', !!lastState, 'myRole?', lastState?.myRole);
 
-    if (myMiners.length === 0) {
-      const proceed = confirm(
-        "Warning: No active mining rigs.\nBuilding this may drain your resources.\nQueue anyway?"
+  // Warning when Builder tries to build non-miner items with no active mining rigs.
+  // Made non-blocking so it cannot prevent legitimate builds.
+  try {
+    if (type !== 'miner' && lastState && lastState.myTeam) {
+      const myMiners = (lastState.deployedMiners || []).filter(m =>
+        m.teamName === lastState.myTeam &&
+        (m.state === 'mining' || m.state === 'setting_up')
       );
-      if (!proceed) return;
+
+      if (myMiners.length === 0) {
+        // Non-blocking warning
+        const note = el('deploy-miner-status') || el('build-status');
+        if (note) {
+          note.textContent = '⚠️ No active mining rigs — building this may drain resources.';
+          setTimeout(() => { if (note) note.textContent = ''; }, 4000);
+        } else {
+          console.warn('Building without active miners');
+        }
+      }
     }
+  } catch (e) {
+    console.warn('Warning check failed (non-fatal):', e);
+    // Always continue to the emit even if warning logic crashes
   }
 
+  if (typeof socket === 'undefined' || !socket) {
+    console.error('[BUILDER] socket not available!');
+    alert('Socket not connected - cannot queue build');
+    return;
+  }
+
+  console.log('[BUILDER] Emitting queueBuild for', type);
   socket.emit('queueBuild', { type }, (res) => {
+    console.log('[BUILDER] queueBuild response for', type, ':', res);
     if (res && !res.ok && res.error) alert(res.error);
   });
+}
+
+function deployAvailableMiner() {
+  // Use the command system to let the Builder choose a location on the map
+  if (typeof enterMapCommandMode === 'function') {
+    enterMapCommandMode('miner', {
+      action: 'deploy',
+      instructions: 'Click a map cell to deploy one of your available mining rigs.'
+    });
+  } else {
+    alert('Map command mode not available. Use the Map tab to deploy miners.');
+  }
 }
 
 function adjustAttack(delta) {
@@ -1156,9 +1234,9 @@ function render(state) {
   const myTeamData = state.teams.find(t => t.name === state.myTeam) || {};
 
   // War section (expanded for new Ready Assets + Fleet Assembly prototype)
-  el('btn-attack').disabled = !(canControl && isWar);
-  el('attack-target').disabled = !(canControl && isWar);
-  el('attack-num').disabled = !(canControl && isWar);
+  const btnAttack = el('btn-attack'); if (btnAttack) btnAttack.disabled = !(canControl && isWar);
+  const attackTarget = el('attack-target'); if (attackTarget) attackTarget.disabled = !(canControl && isWar);
+  const attackNum = el('attack-num'); if (attackNum) attackNum.disabled = !(canControl && isWar);
   if (isWar && !isPureHost) hide('attack-disabled'); else show('attack-disabled');
 
   // New prototype controls (Ready Assets + Assembly)
@@ -1172,13 +1250,12 @@ function render(state) {
   // Negotiator controls (now inside tab-negotiator)
   const tradeBtns = document.querySelectorAll('#tab-negotiator .btn');
   tradeBtns.forEach(b => b.disabled = !(canControl && isNeg));
-  el('trade-target').disabled = !(canControl && isNeg);
+  const tradeTarget = el('trade-target'); if (tradeTarget) tradeTarget.disabled = !(canControl && isNeg);
   if (isNeg && !isPureHost) hide('trade-disabled'); else show('trade-disabled');
 
-  // Builder controls (now inside tab-builder)
-  const buildBtns = document.querySelectorAll('#tab-builder .btn');
-  buildBtns.forEach(b => b.disabled = !(canControl && isBuilder));
-  if (isBuilder && !isPureHost) hide('build-disabled'); else show('build-disabled');
+  // Builder production buttons — client no longer force-disables them
+  // (server enforces via queueBuild handler + clear error message).
+  // The old 'build-disabled' note element was removed during UI grouping refactor.
 
   // Old manual deploy-x/y panel has been removed (deprecated in favor of command-system flow:
   // Button on role tab → map → click destination → confirm).
@@ -1396,47 +1473,7 @@ function renderFleets(fleets) {
   ).join('<br>');
 }
 
-function renderBuildQueue(state, myTeamName) {
-  const container = el('build-status');
-  const myBuild = state.builds && state.builds[myTeamName];
-  if (!myBuild) {
-    container.innerHTML = '<span style="color:#006633">No build data</span>';
-    return;
-  }
-
-  let html = '';
-
-  // NEW: Prefer the multi-queue data when available (one per operational factory)
-  const queues = myBuild.queues || [];
-
-  if (queues.length > 0) {
-    queues.forEach((q, idx) => {
-      const label = q.factoryId === 'home' ? 'Home Factory' : `Factory #${idx + 1}`;
-      if (q.current) {
-        html += `<strong>${label}:</strong> ${q.current.type.toUpperCase()} — ${q.current.remaining}s<br>`;
-      } else {
-        html += `<span style="color:#006633">${label} idle</span><br>`;
-      }
-      if (q.queue && q.queue.length > 0) {
-        html += `&nbsp;&nbsp;Queued: ${q.queue.map(t => t.toUpperCase()).join(' → ')}<br>`;
-      }
-    });
-  } else {
-    // Legacy fallback
-    if (myBuild.current) {
-      html += `<strong>BUILDING:</strong> ${myBuild.current.type.toUpperCase()} — ${myBuild.current.remaining}s left<br>`;
-    } else {
-      html += `<span style="color:#006633">Factory idle</span><br>`;
-    }
-    if (myBuild.queue && myBuild.queue.length > 0) {
-      html += `<strong>QUEUED:</strong> ` + myBuild.queue.map(t => t.toUpperCase()).join(' → ');
-    } else {
-      html += `<span style="color:#006633">Queue empty</span>`;
-    }
-  }
-
-  container.innerHTML = html;
-}
+// renderBuildQueue moved to public/client/production.js (multi-factory support)
 
 // ============================================================
 // WAR FLEET PROTOTYPE FUNCTIONS (client-side design simulation only)
@@ -1721,79 +1758,7 @@ function updateAssemblyGating() {
 // Render the 6 resources for the Builder (exact order from prompt)
 // Always shows all 6 materials with FULL NAMES (no acronyms) in the main resource UI.
 // Acronyms are reserved only for future map pop-up displays (per requirements).
-function renderResourceBalances(teamData) {
-  const container = el('resource-balances');
-  if (!container) return;
-
-  const resourceNames = [
-    'Fused Xenon',
-    'Helium-3 Lattice',
-    'Quantite',
-    'Plasma-Bound Carbon',
-    'Antimatter Catalyst',
-    'Neurocryst'
-  ];
-
-  let html = '';
-
-  if (teamData && Array.isArray(teamData.resourcesArray)) {
-    for (let i = 0; i < 6; i++) {
-      const label = resourceNames[i];
-      const val = teamData.resourcesArray[i] ?? 0;
-      html += `<div><span style="color:#006633">${label}:</span> <strong>${val}</strong></div>`;
-    }
-  } else if (teamData && teamData.resources && typeof teamData.resources === 'object') {
-    // Fallback using known order if resourcesArray is missing
-    const order = resourceNames;
-    for (let i = 0; i < 6; i++) {
-      const label = order[i];
-      const val = teamData.resources[label] ?? 0;
-      html += `<div><span style="color:#006633">${label}:</span> <strong>${val}</strong></div>`;
-    }
-  } else {
-    // No data yet (very early game or pure host) — still show the labels at 0
-    for (let i = 0; i < 6; i++) {
-      const label = resourceNames[i];
-      html += `<div><span style="color:#006633">${label}:</span> <strong>0</strong></div>`;
-    }
-  }
-
-  container.innerHTML = html;
-
-  // === Mineral Synthesis indicator (tied to operational factories) ===
-  const synthDiv = document.createElement('div');
-  synthDiv.style.cssText = 'margin-top:6px; font-size:10px; color:#006633; border-top:1px dotted #003322; padding-top:4px;';
-
-  let operationalFactories = 0;
-  if (lastState && lastState.factories && lastState.myTeam) {
-    operationalFactories = lastState.factories.filter(f =>
-      f.teamName === lastState.myTeam && f.state === 'operational'
-    ).length;
-  }
-
-  if (operationalFactories > 0) {
-    const synthLines = Object.entries(CLIENT_FACTORY_SYNTHESIS)
-      .filter(([_, amt]) => amt > 0)
-      .map(([name, amt]) => `+${amt * operationalFactories} ${name}`)
-      .join(', ');
-
-    synthDiv.innerHTML = `
-      <span style="color:#88aa99">Mineral Synthesis:</span> 
-      <strong>${synthLines}</strong> 
-      <span style="color:#005533">/min (${operationalFactories} factory${operationalFactories > 1 ? 'ies' : ''})</span>
-      <div style="font-size:9px; color:#004422; margin-top:1px;">
-        Slow passive production from your operational factories
-      </div>
-    `;
-  } else {
-    synthDiv.innerHTML = `
-      <span style="color:#664400">No operational factories — no mineral synthesis active.</span>
-      <div style="font-size:9px; color:#443300;">Build and deploy factories to moons for baseline resource income.</div>
-    `;
-  }
-
-  container.appendChild(synthDiv);
-}
+// renderResourceBalances moved to public/client/production.js (with synthesis display)
 
 function renderEventLog(logLines) {
   const log = el('event-log');
@@ -1813,11 +1778,15 @@ function renderEventLog(logLines) {
 // ===== DYNAMIC MAP RENDERING (ui-map branch) =====
 function renderMap(state) {
   const container = el('map-container');
-  if (!container) return;
+  if (!container) {
+    console.warn('Map container not found');
+    return;
+  }
 
-  const size = state.mapSize || 13;
-  const mapData = state.map || {};
-  const myStart = state.myStart || null;
+  try {
+    const size = state.mapSize || 13;
+    const mapData = state.map || {};
+    const myStart = state.myStart || null;
 
   // Update header
   const sizeDisplay = el('map-size-display');
@@ -2034,6 +2003,10 @@ function renderMap(state) {
     cell.dataset.col = col;
     cell.dataset.row = row;
   });
+  } catch (e) {
+    console.error('renderMap error:', e);
+    container.innerHTML = '<div style="color:#ff6666; padding:10px; border:1px solid #440000;">Map failed to render — check browser console (F12) for details.</div>';
+  }
 }
 
 // Rich popup builder - delayed hover, role-gated actions, visibility-aware
@@ -2221,6 +2194,7 @@ console.log('%c[STAR POINT] Team-based client ready', 'color:#006633');
 <!-- Separated client logic (start of modularization per ARCHITECTURE.md soft rule) -->
 <script src="/client/mining-deployment.js"></script>
 <script src="/client/command-system.js"></script>
+<script src="/client/production.js"></script>
 
 </body>
 </html>
