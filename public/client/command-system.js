@@ -84,7 +84,7 @@ function getDefaultInstructions(type) {
     return 'Click a map cell to send a miner rig there.';
   }
   if (type === 'probe') {
-    return 'Click a map cell to launch a probe scan there.';
+    return 'Click a map cell to launch a fast-moving probe. It will travel quickly, take a small snapshot (5 cells), then disappear.';
   }
   return 'Click a destination on the map.';
 }
@@ -269,10 +269,10 @@ function startProbeCommandFromWar() {
 
   enterMapCommandMode('probe', {
     action: 'launch',
-    instructions: 'Click a map cell to launch a probe scan there.'
+    instructions: 'Click destination. Probe will move fast, snapshot ~5 cells on arrival, then vanish.'
   });
 }
 
 // Make the entry points globally available
-window.startMinerCommandFromBuilder = startMinerCommandFromBuilder;
+// (startMinerCommandFromBuilder removed — miners are no longer directed from Builder UI)
 window.startProbeCommandFromWar = startProbeCommandFromWar;

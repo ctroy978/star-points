@@ -270,6 +270,37 @@
     text-shadow: 0 0 6px #ffcc33;
     background: #112200;
   }
+
+  /* Simple hover popup for cell details */
+  #cell-popup {
+    position: absolute;
+    background: #001100;
+    border: 1px solid #006633;
+    color: #00ff9f;
+    font-size: 11px;
+    padding: 6px 8px;
+    z-index: 1000;
+    pointer-events: none; /* default non-interactive; enabled when showing actions */
+    max-width: 260px;
+    box-shadow: 0 0 8px rgba(0, 255, 100, 0.4);
+    white-space: pre-wrap;
+    display: none;
+    line-height: 1.35;
+  }
+  #cell-popup .object-name { font-weight: bold; color: #66ffaa; }
+  #cell-popup .section { margin-top: 4px; border-top: 1px dotted #003322; padding-top: 3px; }
+  #cell-popup .popup-actions { margin-top: 6px; padding-top: 4px; border-top: 1px solid #003322; }
+  #cell-popup .popup-btn {
+    font-size: 10px;
+    padding: 2px 6px;
+    margin: 2px 2px 0 0;
+    background: #002200;
+    border: 1px solid #006633;
+    color: #aaffcc;
+    cursor: pointer;
+  }
+  #cell-popup .popup-btn:hover { background: #003300; }
+  #cell-popup .popup-note { font-size: 9px; color: #668877; font-style: italic; }
 </style>
 </head>
 <body>
@@ -452,7 +483,7 @@
               <div style="margin-top:3px;">
                 <button class="btn" onclick="startProbeCommandFromWar()" 
                         style="border-color:#66ccff; color:#66ccff; font-size:13px; padding:5px 12px; width:100%;">
-                  LAUNCH PROBE TO MAP LOCATION
+                  LAUNCH PROBE (fast move + snapshot)
                 </button>
               </div>
               <div style="font-size:8px; color:#006633; margin-top:2px;">
@@ -589,6 +620,9 @@
           <div class="panel" style="margin:0 0 6px 0; padding:6px 8px;">
             <div class="panel-title" style="margin-bottom:4px;">CURRENT RESOURCES</div>
             <div id="resource-balances" style="font-size:12px; line-height:1.5; display:grid; grid-template-columns:1fr 1fr; gap:2px 12px;"></div>
+            <div style="margin-top:4px; font-size:9px; color:#005533;">
+              Factories synthesize minerals passively (see rates above). This is your baseline income.
+            </div>
           </div>
 
           <!-- MINING: Available (undeployed) Miners count (Phase 0) — prominent for Builder -->
@@ -597,28 +631,11 @@
               <span style="font-size:12px;"><strong>AVAILABLE MINERS</strong> <span style="font-size:9px;color:#006633;">(ready to deploy)</span></span>
               <span id="builder-available-miners" class="big-number" style="font-size:22px; color:#66ffaa;">0</span>
             </div>
-            <div style="font-size:9px; color:#006633; margin-top:2px;">Build more in queue above. Deploy from Map tab or later controls.</div>
+            <div style="font-size:9px; color:#006633; margin-top:2px;">Build more in queue above. Direct deployment &amp; movement from the Map tab (team-wide).</div>
           </div>
 
-          <!-- NEW COMMAND FLOW (per user request): Button lives on Builder page -->
-          <div class="panel" style="margin:0 0 6px 0; padding:6px 8px; background:#001a0a; border-color:#003322;">
-            <div style="font-size:12px; margin-bottom:4px;"><strong>MINER RIGS</strong></div>
-
-            <div style="margin-bottom:6px;">
-              <button class="btn" onclick="startMinerCommandFromBuilder()"
-                      style="font-size:14px; padding:6px 16px; width:100%;">
-                DIRECT A MINER RIG TO MAP LOCATION
-              </button>
-            </div>
-
-            <div style="font-size:10px; color:#006633; line-height:1.3;">
-              Click the button above → you will be taken to the Map.<br>
-              Click the destination cell → confirm the order.<br>
-              The rig will begin moving.
-            </div>
-
-            <div id="builder-miner-command-status" style="font-size:10px; color:#66ffaa; margin-top:4px;"></div>
-          </div>
+          <!-- Miner deployment is now Map-centric (not controlled from Builder UI).
+               Builder produces miners via the queue. Actual deployment / movement orders happen on the Map tab. -->
 
           <!-- Probes moved to War Commander (per playtest). Builder still produces them via queue. -->
 
@@ -636,12 +653,15 @@
                 + MINER (6 Fused Xenon, 4 Helium-3 Lattice, 2 Quantite, 5 Plasma-Bound Carbon, 1 Neurocryst — 55s)
               </button>
               <!-- Probe production: Builder builds for the team; War Commander launches (playtest feedback) -->
+              <br><button class="btn btn-small" onclick="queueBuild('probe')">
+                + PROBE (1 Fused Xenon, 1 Helium-3 Lattice, 1 Quantite — 18s)
+              </button>
             </div>
             <div id="build-disabled" class="disabled-note hidden">View only — you are not the Builder</div>
           </div>
 
           <div class="panel" style="margin:0; padding:6px 8px;">
-            <div class="panel-title">PRODUCTION QUEUE</div>
+            <div class="panel-title">PRODUCTION QUEUES (one per operational factory)</div>
             <div id="build-status" style="min-height:42px; font-size:12px;"></div>
           </div>
         </div>
@@ -657,15 +677,11 @@
             <!-- Grid is built dynamically by renderMap() -->
           </div>
           <div style="font-size:10px; color:#006633; margin-top:6px; text-align:center;">
-            Anomalies: ◉ Major Moon (common) • ☁ Gas Cloud • ◆ Asteroid (rare). Miners=M.
+            Moons: ◉ Large • ○ Small. ☁ Gas • ◆ Asteroid. Miners=M. ✧ = Active Probe (fast, temporary snapshot).
           </div>
 
-          <!-- MINING Phase 5: Deployed Miners summary + move controls (visible to team).
-               Note: MOVE is only available for miners still en route (state = moving). Once setting_up/mining they are locked. -->
-          <div id="my-miners-panel" class="panel" style="margin-top:6px; padding:5px 6px; font-size:10px; background:#0a0a0a;">
-            <div style="margin-bottom:3px;"><strong>MY DEPLOYED MINERS</strong> <span style="color:#006633">(click [MOVE] then map cell)</span></div>
-            <div id="my-miners-list" style="min-height:18px; max-height:70px; overflow:auto;"></div>
-          </div>
+          <!-- Popup for cell details (delayed rich hover) -->
+          <div id="cell-popup"></div>
         </div>
       </div>
 
@@ -719,9 +735,9 @@ let isHost = false;
 let lastState = null;
 let selectedMapSize = 13;    // Default for host map selection
 
-// MINING: interactive map state for Phase 5
-let selectedMinerId = null;   // for move orders
-let mapClickMode = null;      // 'deploy' | 'move' | null
+// Popup hover delay timer
+let popupHoverTimer = null;
+const POPUP_HOVER_DELAY_MS = 420; // ~0.42s hover before showing rich popup
 
 // === WAR FLEET PROTOTYPE STATE (client-side only design simulation) ===
 // Holds locally commissioned fleets for the current browser session.
@@ -889,6 +905,21 @@ function startGame() {
 }
 
 function queueBuild(type) {
+  // Warning when Builder tries to build non-miner items with no active mining rigs
+  if (type !== 'miner' && lastState && lastState.myTeam) {
+    const myMiners = (lastState.deployedMiners || []).filter(m =>
+      m.teamName === lastState.myTeam &&
+      (m.state === 'mining' || m.state === 'setting_up')
+    );
+
+    if (myMiners.length === 0) {
+      const proceed = confirm(
+        "Warning: No active mining rigs.\nBuilding this may drain your resources.\nQueue anyway?"
+      );
+      if (!proceed) return;
+    }
+  }
+
   socket.emit('queueBuild', { type }, (res) => {
     if (res && !res.ok && res.error) alert(res.error);
   });
@@ -918,7 +949,8 @@ function transferTi(amount) {
   });
 }
 
-// Mining deployment logic has been extracted to public/client/mining-deployment.js
+// Shared coordinate helpers (probes etc.) live in public/client/mining-deployment.js
+// Miner command flow lives in public/client/command-system.js (Builder no longer directs miners)
 // per the soft architectural rule (see ARCHITECTURE.md).
 // This keeps the main file smaller and begins proper separation of concerns.
 
@@ -1074,7 +1106,7 @@ function render(state) {
     hide('game-screen');
     hide('game-over');
     myPrototypeWarFleets = []; // clear prototype design state between games
-    selectedMinerId = null; mapClickMode = null;
+    // legacy selection cleared (removed)
     show('lobby-screen');
     renderLobby(state);
     return;
@@ -1087,7 +1119,7 @@ function render(state) {
     hide('game-screen');
     show('game-over');
     myPrototypeWarFleets = []; // clear prototype design state
-    selectedMinerId = null; mapClickMode = null;
+    // legacy selection cleared (removed)
     const banner = el('winner-banner');
     banner.textContent = state.winner ? '★ ' + state.winner + ' WINS ★' : 'GAME OVER';
     banner.style.borderColor = state.winner ? 'var(--green)' : 'var(--red)';
@@ -1200,9 +1232,6 @@ function render(state) {
 
   // Map (dynamic, supports 13/15/17)
   renderMap(state);
-
-  // MINING Phase 5: my miners list + interaction polish
-  if (typeof renderMyMiners === 'function') renderMyMiners(state);
 
   // Event log
   renderEventLog(state.eventLog);
@@ -1376,16 +1405,36 @@ function renderBuildQueue(state, myTeamName) {
   }
 
   let html = '';
-  if (myBuild.current) {
-    html += `<strong>BUILDING:</strong> ${myBuild.current.type.toUpperCase()} — ${myBuild.current.remaining}s left<br>`;
+
+  // NEW: Prefer the multi-queue data when available (one per operational factory)
+  const queues = myBuild.queues || [];
+
+  if (queues.length > 0) {
+    queues.forEach((q, idx) => {
+      const label = q.factoryId === 'home' ? 'Home Factory' : `Factory #${idx + 1}`;
+      if (q.current) {
+        html += `<strong>${label}:</strong> ${q.current.type.toUpperCase()} — ${q.current.remaining}s<br>`;
+      } else {
+        html += `<span style="color:#006633">${label} idle</span><br>`;
+      }
+      if (q.queue && q.queue.length > 0) {
+        html += `&nbsp;&nbsp;Queued: ${q.queue.map(t => t.toUpperCase()).join(' → ')}<br>`;
+      }
+    });
   } else {
-    html += `<span style="color:#006633">Factory idle</span><br>`;
+    // Legacy fallback
+    if (myBuild.current) {
+      html += `<strong>BUILDING:</strong> ${myBuild.current.type.toUpperCase()} — ${myBuild.current.remaining}s left<br>`;
+    } else {
+      html += `<span style="color:#006633">Factory idle</span><br>`;
+    }
+    if (myBuild.queue && myBuild.queue.length > 0) {
+      html += `<strong>QUEUED:</strong> ` + myBuild.queue.map(t => t.toUpperCase()).join(' → ');
+    } else {
+      html += `<span style="color:#006633">Queue empty</span>`;
+    }
   }
-  if (myBuild.queue && myBuild.queue.length > 0) {
-    html += `<strong>QUEUED:</strong> ` + myBuild.queue.map(t => t.toUpperCase()).join(' → ');
-  } else {
-    html += `<span style="color:#006633">Queue empty</span>`;
-  }
+
   container.innerHTML = html;
 }
 
@@ -1710,6 +1759,40 @@ function renderResourceBalances(teamData) {
   }
 
   container.innerHTML = html;
+
+  // === Mineral Synthesis indicator (tied to operational factories) ===
+  const synthDiv = document.createElement('div');
+  synthDiv.style.cssText = 'margin-top:6px; font-size:10px; color:#006633; border-top:1px dotted #003322; padding-top:4px;';
+
+  let operationalFactories = 0;
+  if (lastState && lastState.factories && lastState.myTeam) {
+    operationalFactories = lastState.factories.filter(f =>
+      f.teamName === lastState.myTeam && f.state === 'operational'
+    ).length;
+  }
+
+  if (operationalFactories > 0) {
+    const synthLines = Object.entries(CLIENT_FACTORY_SYNTHESIS)
+      .filter(([_, amt]) => amt > 0)
+      .map(([name, amt]) => `+${amt * operationalFactories} ${name}`)
+      .join(', ');
+
+    synthDiv.innerHTML = `
+      <span style="color:#88aa99">Mineral Synthesis:</span> 
+      <strong>${synthLines}</strong> 
+      <span style="color:#005533">/min (${operationalFactories} factory${operationalFactories > 1 ? 'ies' : ''})</span>
+      <div style="font-size:9px; color:#004422; margin-top:1px;">
+        Slow passive production from your operational factories
+      </div>
+    `;
+  } else {
+    synthDiv.innerHTML = `
+      <span style="color:#664400">No operational factories — no mineral synthesis active.</span>
+      <div style="font-size:9px; color:#443300;">Build and deploy factories to moons for baseline resource income.</div>
+    `;
+  }
+
+  container.appendChild(synthDiv);
 }
 
 function renderEventLog(logLines) {
@@ -1760,12 +1843,11 @@ function renderMap(state) {
   }
 
   const gasGiant = mapData.gasGiant || { x: Math.floor(size/2), y: Math.floor(size/2) };
-  const moons = mapData.moons || [];
-  // MINING: anomalies (Phase 2+). Filter hidden for this team (Phase 4 discovery)
+  // MINING: anomalies (large_moon + small_moon are the functioning orbiting moons)
   const myTeamForDisc = state.myTeam;
   const rawAnomalies = mapData.anomalies || [];
   const anomalies = rawAnomalies.filter(a => {
-    if (a.type === 'major_moon') return true; // always visible
+    if (a.type === 'large_moon' || a.type === 'small_moon' || a.type === 'major_moon' || a.type === 'normal_moon') return true; // moons always visible
     const db = a.discoveredBy || {};
     return !!(myTeamForDisc && db[myTeamForDisc]);
   });
@@ -1778,6 +1860,14 @@ function renderMap(state) {
     const k = `${m.x},${m.y}`;
     minerCounts[k] = (minerCounts[k] || 0) + 1;
   });
+
+  // PROBES: own team's active short-lived probes (fast moving, temporary)
+  const myProbes = (state.deployedProbes || []).filter(p => p.teamName === state.myTeam);
+  const probeAt = {};
+  myProbes.forEach(p => {
+    probeAt[`${p.x},${p.y}`] = p;
+  });
+
   const anomalyAt = {};
   // Use filtered for drawing, but also keep raw for probe? Use filtered here.
   anomalies.forEach(a => { anomalyAt[`${a.x},${a.y}`] = a; });
@@ -1796,7 +1886,6 @@ function renderMap(state) {
 
       const isGasGiant = (col === gasGiant.x && row === gasGiant.y);
       const isMyStart = myStart && col === myStart.x && row === myStart.y;
-      const isMoon = moons.some(m => m.x === col && m.y === row);
 
       if (isGasGiant) {
         cell.classList.add('gas-giant');
@@ -1809,34 +1898,40 @@ function renderMap(state) {
         cell.style.color = '#ffcc33';
         cell.style.fontSize = '16px';
         cell.style.background = '#112200';
-      } else if (isMoon) {
-        cell.textContent = '○';
-        cell.style.color = '#00cc7a';
-        cell.style.fontSize = '12px';
       }
 
       // MINING: draw anomaly symbols if present at cell (Phase 2). Priority over basic moons.
       const cellKeyForAnom = `${col},${row}`;
       const anom = anomalyAt[cellKeyForAnom];
       if (anom && !isGasGiant && !isMyStart) {
-        if (anom.type === 'major_moon') {
+        if (anom.type === 'large_moon' || anom.type === 'major_moon') {
+          // Large / major moons — bigger visual + movement indicator
           cell.textContent = '◉';
           cell.style.color = '#00ff9f';
-          cell.style.fontSize = '14px';
+          cell.style.fontSize = '15px';
           cell.style.background = '#0a2200';
-          cell.title = 'Major Moon (common yields)';
+          const moveNote = anom.orbitRadius ? ' (orbiting)' : '';
+          cell.title = (anom.name || 'Large Moon') + moveNote;
+        } else if (anom.type === 'small_moon' || anom.type === 'normal_moon') {
+          // Small / normal moons — smaller visual, faster on average
+          cell.textContent = '○';
+          cell.style.color = '#66eeaa';
+          cell.style.fontSize = '11px';
+          cell.style.background = '#061a0a';
+          const moveNote = anom.orbitRadius ? ' (orbiting)' : '';
+          cell.title = (anom.name || 'Small Moon') + moveNote;
         } else if (anom.type === 'gas_cloud') {
           cell.textContent = '☁';
           cell.style.color = '#66ccff';
           cell.style.fontSize = '13px';
           cell.style.background = '#001122';
-          cell.title = 'Gas Cloud (medium yields — may need probe)';
+          cell.title = (anom.name || 'Gas Cloud') + ' (medium yields — may need probe)';
         } else if (anom.type === 'asteroid_cluster') {
           cell.textContent = '◆';
           cell.style.color = '#ffaa66';
           cell.style.fontSize = '12px';
           cell.style.background = '#221100';
-          cell.title = 'Asteroid Cluster (rare yields — may need probe)';
+          cell.title = (anom.name || 'Asteroid Cluster') + ' (rare yields — may need probe)';
         }
       }
 
@@ -1856,39 +1951,31 @@ function renderMap(state) {
         cell.title = cnt + ' miner(s) here — ' + states;
       }
 
-      // MINING Phase 5: make interactive for Builder deploy (if has available) or selected miner move
-      const isBuilderWithMiners = (state.myRole === 'builder') && ((state.teams || []).find(t => t.name === state.myTeam)?.availableMiners || 0) > 0;
-      const hasMoveTarget = !!selectedMinerId;
+      // PROBES: draw active own probes (temporary, fast-moving)
+      const probeKey = `${col},${row}`;
+      if (probeAt[probeKey]) {
+        const p = probeAt[probeKey];
+        cell.textContent = '✧';
+        cell.style.color = '#66ccff';
+        cell.style.fontSize = '13px';
+        cell.style.background = '#001133';
+        cell.style.textShadow = '0 0 3px #66ccff';
+        cell.title = `Active probe (en route to snapshot)`;
+      }
 
-      // New command system: also show crosshair when a command is pending
+      // Command mode (from popup buttons or War/Builder panels) shows crosshair
       const inCommandMode = (typeof isInCommandMode === 'function') && isInCommandMode();
 
-      if ((hasMoveTarget || isBuilderWithMiners || inCommandMode) && !isGasGiant) {
+      if (inCommandMode && !isGasGiant) {
         cell.style.cursor = 'crosshair';
         cell.style.pointerEvents = 'auto';
         cell.onclick = (e) => {
           e.stopPropagation();
 
-          // NEW COMMAND SYSTEM (preferred path)
           if (typeof isInCommandMode === 'function' && isInCommandMode() &&
               typeof handleMapCellCommandClick === 'function') {
             const handled = handleMapCellCommandClick(col, row);
-            if (handled) return; // command system took care of it (including confirmation)
-          }
-
-          // Legacy path (still supported for now)
-          if (selectedMinerId) {
-            // Move selected
-            socket.emit('moveMiner', { minerId: selectedMinerId, targetX: col, targetY: row }, (res) => {
-              if (res && !res.ok && res.error) alert('Move: ' + res.error);
-              selectedMinerId = null; mapClickMode = null;
-              if (lastState) render(lastState);
-            });
-          } else if (isBuilderWithMiners) {
-            // Deploy
-            socket.emit('deployMiner', { targetX: col, targetY: row }, (res) => {
-              if (res && !res.ok && res.error) alert('Deploy: ' + res.error);
-            });
+            if (handled) return;
           }
         };
       } else {
@@ -1900,106 +1987,170 @@ function renderMap(state) {
   }
 
   container.appendChild(wrapper);
-}
 
-// MINING Phase 5: render list of own deployed miners with move buttons (interactive)
-function renderMyMiners(state) {
-  const container = el('my-miners-list');
-  if (!container) return;
+  // Rich delayed-hover popup system
+  const popup = el('cell-popup') || document.createElement('div');
+  popup.id = 'cell-popup';
+  if (!el('cell-popup')) document.body.appendChild(popup);
 
-  const myMs = (state.deployedMiners || []).filter(m => m.teamName === state.myTeam);
-  if (myMs.length === 0) {
-    container.innerHTML = '<span style="color:#006633;">No miners deployed yet.</span>';
-    selectedMinerId = null;
-    return;
-  }
+  // Clear any previous timer when re-rendering map
+  if (popupHoverTimer) { clearTimeout(popupHoverTimer); popupHoverTimer = null; }
 
-  let html = '';
-  myMs.forEach(m => {
-    const isSel = selectedMinerId === m.id;
-    const stateLabel = m.state === 'mining' ? '⛏' : (m.state === 'setting_up' ? '⏳' : '→');
-    html += `<span style="display:inline-block; margin:1px 3px; padding:1px 3px; border:1px solid ${isSel?'#ffcc33':'#003322'}; background:#111;">`;
-    const coordLabel = (typeof formatMapCoord === 'function') 
-      ? formatMapCoord(m.x, m.y) 
-      : `(${m.x},${m.y})`;
-    html += `${stateLabel} @${coordLabel} [${m.state}] `;
-
-    // Only allow moving miners that are still en route. Once setting_up or mining, they are locked to the site.
-    if (m.state === 'moving') {
-      html += `<button class="btn btn-small" style="padding:0 3px; font-size:9px;" onclick="selectMinerForMove('${m.id}')">MOVE</button>`;
-    } else {
-      html += `<span style="color:#664400; font-size:8px;">(locked)</span>`;
-    }
-
-    if (isSel) html += ` <span style="color:#ffcc33;">(click map cell)</span>`;
-    html += `</span> `;
-  });
-  container.innerHTML = html;
-}
-
-function selectMinerForMove(minerId) {
-  // Extra safety: only allow moving miners that are still 'moving'
-  const miner = (lastState?.deployedMiners || []).find(m => m.id === minerId);
-  if (miner && miner.state !== 'moving') {
-    alert('This miner has already been deployed and cannot be moved.');
-    return;
-  }
-
-  selectedMinerId = minerId;
-  mapClickMode = 'move';
-  // Re-render to update highlights
-  if (lastState) render(lastState);
-  // Temporary note
-  const note = el('deploy-miner-status');
-  if (note) {
-    note.textContent = 'Click any map cell to choose destination';
-    setTimeout(() => { if (note) note.textContent = ''; }, 4000);
-  }
-}
-
-// Enhance renderMap to also handle move clicks when a miner selected
-// (we augment the cell onclicks if in move mode - done by patching after initial build in render)
-function enableMapMoveClicks(state) {
-  // After renderMap has run, we can walk cells and override for move mode
-  // Simpler: since cells rebuilt, we attach extra logic in a post-pass (called from render after map)
-  const container = el('map-container');
-  if (!container || !selectedMinerId || mapClickMode !== 'move') return;
-
-  // Find cells and attach move handler (cells are deep)
-  const cells = container.querySelectorAll('.map-cell');
+  const cells = wrapper.querySelectorAll('.map-cell');
   cells.forEach(cell => {
-    // Parse position from ? Hard without data attrs. Use a global last render positions or attach via closure in original.
-    // For practicality in single file: on click anywhere in map container when in move mode, but better use event delegation.
+    const col = parseInt(cell.dataset.col || -1);
+    const row = parseInt(cell.dataset.row || -1);
+    if (col < 0 || row < 0) return;
+
+    cell.addEventListener('mouseenter', (e) => {
+      // Cancel any pending previous popup
+      if (popupHoverTimer) clearTimeout(popupHoverTimer);
+
+      popupHoverTimer = setTimeout(() => {
+        const infoHtml = buildCellInfo(state, col, row);
+        if (!infoHtml) return;
+
+        popup.innerHTML = infoHtml;
+        popup.style.display = 'block';
+        popup.style.left = (e.pageX + 14) + 'px';
+        popup.style.top = (e.pageY + 10) + 'px';
+
+        // Make popup interactive if it contains action buttons
+        const hasActions = popup.querySelector('.popup-actions');
+        popup.style.pointerEvents = hasActions ? 'auto' : 'none';
+      }, POPUP_HOVER_DELAY_MS);
+    });
+
+    cell.addEventListener('mouseleave', () => {
+      if (popupHoverTimer) {
+        clearTimeout(popupHoverTimer);
+        popupHoverTimer = null;
+      }
+      popup.style.display = 'none';
+      popup.style.pointerEvents = 'none';
+    });
+
+    // Store for other uses (command system etc)
+    cell.dataset.col = col;
+    cell.dataset.row = row;
   });
 }
 
-// Simple delegation: listen once for map clicks for move/deploy advanced
-// We'll attach a one-time smarter handler on the container in render when needed.
-function setupMapInteractionDelegation(state) {
-  const container = el('map-container');
-  if (!container) return;
-  // Remove old
-  container.onclick = null;
+// Rich popup builder - delayed hover, role-gated actions, visibility-aware
+function buildCellInfo(state, col, row) {
+  if (!state || !state.map) return null;
 
-  const hasSelectedMove = selectedMinerId && mapClickMode === 'move';
-  const myTeamData = (state.teams || []).find(t => t.name === state.myTeam) || {};
-  const canDeployClick = (state.myRole === 'builder') && (myTeamData.availableMiners || 0) > 0;
+  const mapData = state.map;
+  const rawAnomalies = mapData.anomalies || [];
+  const myTeam = state.myTeam;
+  const myRole = state.myRole;
 
-  if (hasSelectedMove || canDeployClick) {
-    container.style.cursor = hasSelectedMove ? 'crosshair' : 'default';
-    container.onclick = function(ev) {
-      // Find which cell was clicked by walking parents or use coordinate calc (simple grid approx)
-      // Since dynamic grid, use bounding + math hard. Instead rely on per-cell onclicks we set for deploy.
-      // For move: if selected, emit move to a guessed cell? For full polish we enhance cell creation.
-      // Practical compromise: if move mode, clicking the whole map area is ambiguous. Use the existing per-cell for deploy.
-      // To deliver: when move selected, the per-cell onclicks in renderMap will be overridden below? 
-      // Rebuild: the cell onclick we set can check global selectedMinerId
-    };
+  // Visibility rules (point 5)
+  const visibleAnomalies = rawAnomalies.filter(a => {
+    if (a.type === 'large_moon' || a.type === 'small_moon') return true; // always known
+    const db = a.discoveredBy || {};
+    return !!(myTeam && db[myTeam]);
+  });
+
+  const anomHere = visibleAnomalies.find(a => a.x === col && a.y === row);
+
+  // Own team's miners at this exact cell (always visible to own team)
+  const myMinersHere = (state.deployedMiners || []).filter(m =>
+    m.teamName === myTeam && m.x === col && m.y === row
+  );
+
+  // Placeholder for future spatial objects (factories, academies, enemy miners when scouted)
+  // For now we only have solid data on own miners + revealed anomalies
+
+  let html = `<div><strong>Cell ${String.fromCharCode(65 + col)}${row + 1}</strong></div>`;
+
+  // Anomalies (only if visible per rules)
+  if (anomHere) {
+    const name = anomHere.name || `${anomHere.type} at ${col},${row}`;
+    let extra = '';
+    if (anomHere.orbitRadius) {
+      extra = ` <span style="color:#ffcc33;">(orbiting ~${Math.round(anomHere.baseIntervalMin || 8)}min/cell)</span>`;
+    }
+    const typeLabel = anomHere.type === 'large_moon' ? 'Large Moon' :
+                      anomHere.type === 'small_moon' ? 'Small Moon' :
+                      anomHere.type.replace('_', ' ');
+    html += `<div class="section"><span class="object-name">${name}</span>${extra}<br><span style="color:#88aa99;">${typeLabel}</span></div>`;
+  }
+
+  // Own miners at this cell (permanent for the team)
+  if (myMinersHere.length > 0) {
+    html += `<div class="section"><strong>Your Miners here:</strong>`;
+    myMinersHere.forEach(m => {
+      const stateLabel = m.state === 'mining' ? '⛏ mining' : (m.state === 'setting_up' ? '⏳ setting up' : '→ moving');
+      html += `<div style="margin:2px 0;">${stateLabel} <span style="color:#669977;">(id ${m.id.slice(-6)})</span></div>`;
+    });
+    html += `</div>`;
+
+    // Action buttons - only for Builder, only for moving miners
+    if (myRole === 'builder') {
+      const redirectable = myMinersHere.filter(m => m.state === 'moving');
+      if (redirectable.length > 0) {
+        html += `<div class="popup-actions">`;
+        html += `<div style="font-size:9px; color:#88aa99; margin-bottom:2px;">Redirect miner (Builder only):</div>`;
+        redirectable.forEach(m => {
+          html += `<button class="popup-btn" onclick="redirectMinerFromPopup('${m.id}', ${col}, ${row})">Redirect ${m.id.slice(-6)}</button>`;
+        });
+        html += `</div>`;
+      }
+    }
+  }
+
+  // Starting position marker
+  if (state.myStart && state.myStart.x === col && state.myStart.y === row) {
+    html += `<div class="section">★ Your team's starting position</div>`;
+  }
+
+  // Future / scouted objects note (placeholder for point 5 permanent asset rules)
+  // When we have factories, academies, or previously scouted enemy assets, we will show them here
+  // with a "information may be outdated" note if they were discovered via probe/fleet in the past.
+
+  return html;
+}
+
+// Called from buttons inside the rich popup (Builder only)
+function redirectMinerFromPopup(minerId, currentCol, currentRow) {
+  // Close popup immediately
+  const popup = el('cell-popup');
+  if (popup) popup.style.display = 'none';
+
+  // Enter command mode for this specific miner redirect
+  if (typeof enterMapCommandMode === 'function') {
+    enterMapCommandMode('miner', {
+      minerId: minerId,
+      action: 'move',
+      instructions: `Redirect miner ${minerId.slice(-6)} to a new location`
+    });
+  } else {
+    // Fallback: simple prompt for now
+    const x = prompt('New target X (column 0-12):');
+    const y = prompt('New target Y (row 0-12):');
+    if (x !== null && y !== null) {
+      socket.emit('moveMiner', { minerId, targetX: parseInt(x), targetY: parseInt(y) }, (res) => {
+        if (res && !res.ok && res.error) alert('Redirect failed: ' + res.error);
+      });
+    }
   }
 }
+
+// Legacy direct miner list + select-for-move system removed (deprecated per design).
+// Miner redirection now happens via rich delayed-hover popups (role-restricted to Builder).
 
 // ===== TAB SYSTEM (feature/ui-map) =====
 let currentTab = 'war';
+
+// Client-side mirror of server synthesis rates for UI display
+const CLIENT_FACTORY_SYNTHESIS = {
+  'Fused Xenon': 2,
+  'Helium-3 Lattice': 1,
+  'Plasma-Bound Carbon': 1,
+  'Neurocryst': 1
+};
+const CLIENT_SYNTHESIS_INTERVAL_SECONDS = 60;
 
 function switchTab(tab) {
   const previousTab = currentTab;

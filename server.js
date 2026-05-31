@@ -75,7 +75,13 @@ const BUILD_COSTS = {
   // MINING: Miner cost per spec (6/4/2/5/0/1) — Phase 0
   miner:     [6, 4, 2, 5, 0, 1],
   // MINING: Probe for discovery (cheap) — Phase 4
-  probe:     [1, 1, 1, 0, 0, 1]
+  probe:     [1, 1, 1, 0, 0, 1],
+  // NEW: Factory kit — extremely expensive and slow to build (then slow to deploy/setup)
+  factory:   [22, 16, 10, 14, 8, 6],
+  // NEW: Admiral (produced via Military Academy at home base)
+  admiral:   [10, 7, 5, 6, 4, 3],
+  // NEW: Capitol Ship (command center for fleet formation, no combat role)
+  capitol:   [35, 24, 15, 20, 12, 9]
 };
 
 const BUILD_TIMES = {
@@ -84,7 +90,13 @@ const BUILD_TIMES = {
   // MINING: Miner build time (Phase 0)
   miner: 55,
   // MINING: Probe build time (Phase 4)
-  probe: 18
+  probe: 18,
+  // NEW: Factory kit build time (deploy + 3min setup is the bigger time sink)
+  factory: 180,
+  // NEW: Admiral production time (via home Military Academy)
+  admiral: 75,
+  // NEW: Capitol Ship build time (major project)
+  capitol: 240
 };
 
 // MINING: Core tuning constants (exposed for easy balancing, per plan)
@@ -95,11 +107,38 @@ const MAX_MINERS_PER_SITE = 3;
 const STACKING_MULTIPLIERS = [1.0, 0.75, 0.55]; // index 0=1rig, 1=2rigs, 2=3rigs (diminishing returns)
 const PROBE_COST = [1, 1, 1, 0, 0, 1]; // cheap discovery unit
 const PROBE_TIME = 18;
-const PROBE_RADIUS = 2;                // cells
+const PROBE_RADIUS = 2;                // legacy instant radius (being replaced)
+const PROBE_MOVE_TICKS = 2;            // probes move very quickly (every 2 ticks)
+const PROBE_SNAPSHOT_SIZE = 5;         // max cells in a snapshot (center + 4 directions = plus shape)
+
+// FACTORIES: slow but achievable deployment + setup
+// Goal: second factory should feel like a meaningful investment that players can realistically benefit from in a ~40 min game.
+const FACTORY_DEPLOY_SPEED_TICKS = 8;    // noticeably faster than before (was 15), but still deliberate
+const FACTORY_SETUP_TIME_MS = 180000;    // 3 minutes setup once arrived at moon (chosen over 2 min for weight)
+const MAX_FACTORIES_PER_MOON = 1;        // hard rule: only one factory per moon
+
+// Mineral Synthesis: passive resource generation from operational factories.
+// Provides a meaningful baseline income so teams can build multiple things early
+// and sustain production even before mining rigs are fully online.
+const FACTORY_SYNTHESIS_INTERVAL_TICKS = 60; // every 60 seconds (1 minute)
+const FACTORY_SYNTHESIS_PER_FACTORY = {
+  // Increased to support a healthier early/mid game alongside active mining
+  'Fused Xenon': 3,
+  'Helium-3 Lattice': 2,
+  'Quantite': 0,
+  'Plasma-Bound Carbon': 2,
+  'Antimatter Catalyst': 0,
+  'Neurocryst': 1
+};
 
 // Yield base (per rig per cycle, before stacking; integers for simplicity)
 const YIELD_BASE = {
-  major_moon: 5,       // common
+  // Current moon types (large = high yield, small = lower yield + different bias)
+  large_moon: 6,
+  small_moon: 3,
+  // Legacy keys for restored saved games during transition
+  major_moon: 5,
+  normal_moon: 3,
   gas_cloud: 2,        // medium
   asteroid_cluster: 1  // rare (plan ~0.6, floored to 1 for playability)
 };
@@ -107,13 +146,15 @@ const YIELD_BASE = {
 const MAX_QUEUE = 4;
 
 // Typical base ranges (midpoint used for base before variance + bias)
+// Increased to give teams enough starting resources to build several things early
+// (multiple miners + probes) before mining income really ramps up.
 const RESOURCE_BASE_RANGES = {
-  'Fused Xenon':         { min: 14, max: 22 },
-  'Helium-3 Lattice':    { min: 10, max: 16 },
-  'Quantite':            { min: 5,  max: 9  },
-  'Plasma-Bound Carbon': { min: 3,  max: 7  },
-  'Antimatter Catalyst': { min: 1,  max: 4  },
-  'Neurocryst':          { min: 0,  max: 2  }
+  'Fused Xenon':         { min: 22, max: 32 },
+  'Helium-3 Lattice':    { min: 16, max: 24 },
+  'Quantite':            { min: 9,  max: 15 },
+  'Plasma-Bound Carbon': { min: 7,  max: 13 },
+  'Antimatter Catalyst': { min: 3,  max: 7  },
+  'Neurocryst':          { min: 2,  max: 5  }
 };
 
 // Legacy combat constants kept minimal (war scope reduced for this pass)
@@ -177,6 +218,20 @@ function generateStartingResources(teamIndex, totalTeams) {
     resources[mat] = Math.max(0, Math.round(val));
   }
 
+  // Guarantee: every team gets enough resources to bootstrap early game.
+  // We guarantee enough for at least TWO miners so the Builder can get production
+  // rolling even on bad rolls, while still preserving asymmetry for trading.
+  const MINER_COST = [6, 4, 2, 5, 0, 1]; // matches BUILD_COSTS.miner
+  const MINER_BOOTSTRAP_MULTIPLIER = 2;   // guarantee for 2 miners
+
+  for (let i = 0; i < RESOURCE_ORDER.length; i++) {
+    const mat = RESOURCE_ORDER[i];
+    const needed = MINER_COST[i] * MINER_BOOTSTRAP_MULTIPLIER;
+    if ((resources[mat] || 0) < needed) {
+      resources[mat] = needed;
+    }
+  }
+
   return resources;
 }
 
@@ -199,14 +254,22 @@ class Team {
     this.factoryHP = START_FACTORY_HP;
 
     this.players = new Map(); // playerName -> { name, role, socketId }
-    this.buildQueue = [];
-    this.currentBuild = null; // { type, remaining }
+
+    // Production system now tied to factories.
+    // Each operational factory gives the team one independent build queue.
+    // Starting home factory = 1 queue. Extra deployed factories = additional queues.
+    this.buildQueues = []; // [{ factoryId, queue: string[], current: {type, remaining} | null }]
 
     // Starter kit per playtest feedback:
     // - Builder starts with 1 mining rig ready to deploy immediately
     // - War Commander starts with 1 probe ready to deploy immediately
     this.availableMiners = 1;
     this.probes = 1;
+
+    // NEW infrastructure units
+    this.availableFactories = 0;  // factory kits ready to deploy to moons (1 per moon max)
+    this.availableAdmirals = 0;   // produced at home Military Academy
+    this.capitolShips = 0;        // command vessels for fleet formation
   }
 
   getRolePlayer(role) {
@@ -256,6 +319,13 @@ class Game {
 
     // MINING: deployed miner rigs on the map (Phase 1+). Separate from abstract fleets.
     this.deployedMiners = [];
+
+    // PROBES: short-lived mobile reconnaissance units (new functional system)
+    // They move quickly to a target, take a small snapshot, then disappear.
+    this.deployedProbes = [];
+
+    // FACTORIES: spatial buildings. 1 per moon max + starting home base factory.
+    this.factories = [];
 
     // Map system (new for ui-map branch)
     this.mapSize = 13;                 // 13, 15, or 17
@@ -352,7 +422,8 @@ function persistGameState(game) {
         // MINING: persist availableMiners + probes (Phase 0/6)
         availableMiners: team.availableMiners || 0,
         probes: team.probes || 0,
-        deployedMiners: teamMiners
+        deployedMiners: teamMiners,
+        buildQueues: team.buildQueues || []
       });
 
       for (const p of team.players.values()) {
@@ -369,7 +440,7 @@ function persistGameState(game) {
     // === NEW: Persist map data if it exists ===
     if (game.map && game.map.gasGiant) {
       // MINING: include anomalies (with discoveredBy) for persistence Phase 6
-      db.saveGameMap(game.code, game.mapSize, game.map.gasGiant, game.map.moons || [], game.map.anomalies || []);
+      db.saveGameMap(game.code, game.mapSize, game.map.gasGiant, [], game.map.anomalies || []);
       if (game.map.starts) {
         db.saveTeamStarts(game.code, game.map.starts);
       }
@@ -406,6 +477,27 @@ function hydrateSavedGame(saved) {
     // MINING: hydrate availableMiners (defaults 0 for old saves) — Phase 0/6
     team.availableMiners = (t.availableMiners != null) ? t.availableMiners : 0;
     team.probes = (t.probes != null) ? t.probes : 0;
+    team.availableFactories = (t.availableFactories != null) ? t.availableFactories : 0;
+    team.availableAdmirals = (t.availableAdmirals != null) ? t.availableAdmirals : 0;
+    team.capitolShips = (t.capitolShips != null) ? t.capitolShips : 0;
+
+    // Migrate old single-queue saves to the new multi-factory queue system
+    if (Array.isArray(t.buildQueues) && t.buildQueues.length > 0) {
+      team.buildQueues = t.buildQueues;
+    } else if (t.buildQueue && t.buildQueue.length > 0) {
+      // Legacy single queue → put it in the first (home) queue
+      team.buildQueues = [{
+        factoryId: 'home',
+        queue: [...t.buildQueue],
+        current: t.currentBuild || null
+      }];
+    } else {
+      team.buildQueues = [{
+        factoryId: 'home',
+        queue: [],
+        current: t.currentBuild || null
+      }];
+    }
 
     game.teams.set(t.name, team);
   }
@@ -456,9 +548,8 @@ function hydrateSavedGame(saved) {
   if (saved.mapData && saved.mapData.gasGiant) {
     game.map = {
       gasGiant: saved.mapData.gasGiant,
-      moons: saved.mapData.moons || [],
       starts: saved.teamStarts || {},
-      // MINING: anomalies restored (Phase 2/6; may be empty until DB schema updated)
+      // Legacy moons array is no longer used (all moons are now in anomalies as large_moon/small_moon)
       anomalies: saved.mapData.anomalies || []
     };
     console.log(`[DB] Restored full map data for ${saved.code}`);
@@ -490,10 +581,19 @@ setInterval(() => {
     processBuilds(game);
     processFleets(game);
 
+    // Moon orbits (slow movement)
+    processMoonOrbits(game);
+
     // MINING: process miner movement + setup timers + mining yields (Phase 1/2/3)
     processMinerMovement(game);
     processMinerSetup(game);
     processMinerMining(game);
+
+    // PROBES: fast-moving short-lived reconnaissance units
+    processProbeMovement(game);
+
+    // FACTORIES: slow mineral synthesis (baseline permanent resource flow)
+    processFactorySynthesis(game);
 
     // Passive mining removed in this pass (new 6-resource economy + future mechanics)
     checkWinCondition(game);
@@ -527,7 +627,17 @@ function broadcastState(game) {
       members,
       // MINING: broadcast availableMiners count (for Builder UI) — Phase 0
       availableMiners: t.availableMiners || 0,
-      probes: t.probes || 0
+      probes: t.probes || 0,
+      // NEW infrastructure
+      availableFactories: t.availableFactories || 0,
+      availableAdmirals: t.availableAdmirals || 0,
+      capitolShips: t.capitolShips || 0,
+      // NEW: Multiple build queues (one per operational factory)
+      buildQueues: (t.buildQueues || []).map(q => ({
+        factoryId: q.factoryId,
+        queue: [...(q.queue || [])],
+        current: q.current ? { ...q.current } : null
+      }))
     });
   }
 
@@ -539,12 +649,19 @@ function broadcastState(game) {
     eta: Math.max(1, Math.ceil((f.arrivalTime - Date.now()) / 1000))
   }));
 
-  // Build status per team
+  // Build status per team — now multiple queues (one per operational factory)
   const builds = {};
   for (const [name, team] of game.teams) {
     builds[name] = {
-      queue: [...team.buildQueue],
-      current: team.currentBuild
+      // Legacy single-queue fields kept temporarily for old client code
+      queue: team.buildQueues.length > 0 ? [...team.buildQueues[0].queue] : [],
+      current: team.buildQueues.length > 0 ? (team.buildQueues[0].current || null) : null,
+      // NEW: Full multi-factory queue data (preferred by new Builder UI)
+      queues: team.buildQueues.map(q => ({
+        factoryId: q.factoryId,
+        queue: [...q.queue],
+        current: q.current ? { ...q.current } : null
+      }))
     };
   }
 
@@ -566,12 +683,32 @@ function broadcastState(game) {
       targetX: m.targetX,
       targetY: m.targetY
     })) : [],
+
+    // PROBES: short-lived mobile reconnaissance units (visible primarily to owning team)
+    deployedProbes: game.deployedProbes ? game.deployedProbes.map(p => ({
+      id: p.id,
+      teamName: p.teamName,
+      x: p.x,
+      y: p.y,
+      targetX: p.targetX,
+      targetY: p.targetY,
+      state: p.state
+    })) : [],
+
+    // FACTORIES: spatial (home base + deployed to moons, 1 per moon max)
+    factories: game.factories ? game.factories.map(f => ({
+      id: f.id,
+      teamName: f.teamName,
+      x: f.x,
+      y: f.y,
+      state: f.state,
+      isHome: !!f.isHome
+    })) : [],
     // Map data (new)
     mapSize: game.mapSize,
     map: game.map ? {
       gasGiant: game.map.gasGiant,
-      moons: game.map.moons || [],
-      // MINING: anomalies sent (full list for Phase 2; discovery filtering in Phase 4+)
+      // moons: legacy array removed — all moons live in anomalies (large_moon / small_moon)
       anomalies: game.map.anomalies || []
     } : null
   };
@@ -614,32 +751,60 @@ function processBuilds(game) {
   for (const team of game.teams.values()) {
     if (team.factoryHP <= 0) continue;
 
-    let current = team.currentBuild;
+    // NEW: Support multiple parallel build queues, one per operational factory.
+    // The number of queues should match the number of operational factories for the team.
+    // Each queue runs independently.
+    const operationalFactories = (game.factories || []).filter(f =>
+      f.teamName === team.name && f.state === 'operational'
+    );
 
-    if (!current && team.buildQueue.length > 0) {
-      const nextType = team.buildQueue.shift();
-
-      // MINING: support miner builds (Phase 0). Frigate/destroyer still work.
-      const time = BUILD_TIMES[nextType] || 30;
-
-      current = { type: nextType, remaining: time };
-      team.currentBuild = current;
-      game.addEvent(`[${team.name}] Builder started ${nextType.toUpperCase()}`);
+    // Ensure we have the correct number of queue slots (one per operational factory)
+    while (team.buildQueues.length < operationalFactories.length) {
+      const factory = operationalFactories[team.buildQueues.length];
+      team.buildQueues.push({
+        factoryId: factory ? factory.id : 'home',
+        queue: [],
+        current: null
+      });
     }
 
-    if (current) {
-      current.remaining--;
-      if (current.remaining <= 0) {
-        // Complete build — add the unit
-        if (current.type === 'frigate') team.frigates++;
-        else if (current.type === 'destroyer') team.destroyers++;
-        // MINING: Miner production completes into availableMiners pool (Phase 0)
-        else if (current.type === 'miner') team.availableMiners = (team.availableMiners || 0) + 1;
-        // MINING: Probe completes into consumable count (Phase 4)
-        else if (current.type === 'probe') team.probes = (team.probes || 0) + 1;
+    // Trim excess queues if factories were lost (rare)
+    if (team.buildQueues.length > operationalFactories.length) {
+      team.buildQueues.length = operationalFactories.length;
+    }
 
-        game.addEvent(`[${team.name}] completed 1 ${current.type.toUpperCase()}`);
-        team.currentBuild = null;
+    // Process every active queue in parallel
+    for (let i = 0; i < team.buildQueues.length; i++) {
+      const q = team.buildQueues[i];
+      let current = q.current;
+
+      if (!current && q.queue.length > 0) {
+        const nextType = q.queue.shift();
+        const time = BUILD_TIMES[nextType] || 30;
+
+        current = { type: nextType, remaining: time };
+        q.current = current;
+
+        const factoryLabel = operationalFactories[i]?.isHome ? 'Home Base' : 'Forward Factory';
+        game.addEvent(`[${team.name}] Builder started ${nextType.toUpperCase()} at ${factoryLabel}`);
+      }
+
+      if (current) {
+        current.remaining--;
+        if (current.remaining <= 0) {
+          // Complete build — add the unit
+          if (current.type === 'frigate') team.frigates++;
+          else if (current.type === 'destroyer') team.destroyers++;
+          else if (current.type === 'miner') team.availableMiners = (team.availableMiners || 0) + 1;
+          else if (current.type === 'probe') team.probes = (team.probes || 0) + 1;
+          else if (current.type === 'factory') team.availableFactories = (team.availableFactories || 0) + 1;
+          else if (current.type === 'admiral') team.availableAdmirals = (team.availableAdmirals || 0) + 1;
+          else if (current.type === 'capitol') team.capitolShips = (team.capitolShips || 0) + 1;
+
+          const factoryLabel = operationalFactories[i]?.isHome ? 'Home Base' : 'Forward Factory';
+          game.addEvent(`[${team.name}] completed 1 ${current.type.toUpperCase()} at ${factoryLabel}`);
+          q.current = null;
+        }
       }
     }
   }
@@ -740,16 +905,60 @@ function processMinerMovement(game) {
       continue;
     }
 
-    const tx = miner.targetX != null ? miner.targetX : miner.x;
-    const ty = miner.targetY != null ? miner.targetY : miner.y;
+    // Resolve current target position if this is an object-targeted move (e.g. moving moon)
+    let tx = miner.targetX != null ? miner.targetX : miner.x;
+    let ty = miner.targetY != null ? miner.targetY : miner.y;
+
+    if (miner.targetObject) {
+      const targetAnom = (game.map.anomalies || []).find(a => a.name === miner.targetObject || a.id === miner.targetObject);
+      if (targetAnom) {
+        tx = targetAnom.x;
+        ty = targetAnom.y;
+      }
+    }
 
     if (miner.x === tx && miner.y === ty) {
-      if (miner.state === 'moving') {
-        miner.state = 'setting_up';
-        miner.setupCompleteTime = now + MINER_SETUP_TIME_MS;
-        game.addEvent(`[${miner.teamName}] Miner arrived at (${tx},${ty}) — setting up (60s)`);
-        debugLog(game, `MINER ARRIVED: id=${miner.id} team=${miner.teamName} pos=(${miner.x},${miner.y}) target=(${tx},${ty})`);
+      // Arrived at (current) target coords
+      const targetAnom = miner.targetObject ? (game.map.anomalies || []).find(a => a.name === miner.targetObject || a.id === miner.targetObject) : null;
+
+      if (targetAnom && miner.x === targetAnom.x && miner.y === targetAnom.y) {
+        // Object is here - normal arrival
+        if (miner.state === 'moving') {
+          miner.state = 'setting_up';
+          miner.setupCompleteTime = now + MINER_SETUP_TIME_MS;
+          game.addEvent(`[${miner.teamName}] Miner arrived at ${miner.targetObject || `(${tx},${ty})`} — setting up (60s)`);
+          debugLog(game, `MINER ARRIVED AT OBJECT: id=${miner.id} team=${miner.teamName} object=${miner.targetObject} pos=(${miner.x},${miner.y})`);
+        }
+      } else if (miner.targetObject) {
+        // Expected object not at this cell. Per user rule: only correct if expected cell empty (it is).
+        // Search nearby on this "arrival" logic. If not found, self-destruct on next check.
+        const nearby = (game.map.anomalies || []).filter(a => 
+          a.name === miner.targetObject || a.id === miner.targetObject
+        ).filter(a => Math.abs(a.x - miner.x) <= 2 && Math.abs(a.y - miner.y) <= 2); // small search radius
+
+        if (nearby.length > 0) {
+          // Found nearby - update target and continue (will move next steps)
+          const found = nearby[0];
+          miner.targetX = found.x;
+          miner.targetY = found.y;
+          debugLog(game, `MINER CORRECTION: id=${miner.id} found ${miner.targetObject} nearby at (${found.x},${found.y})`);
+          game.addEvent(`[${miner.teamName}] Miner adjusted course to ${miner.targetObject} (nearby)`);
+        } else {
+          // Not found even nearby - failure per rule. Self-destruct miner (remove it).
+          debugLog(game, `MINER LOST TARGET: id=${miner.id} team=${miner.teamName} could not find ${miner.targetObject} - self-destructing`);
+          game.addEvent(`[${miner.teamName}] Mining rig lost contact with ${miner.targetObject} and was lost.`);
+          // do not push to toKeep -> it is removed
+          continue;
+        }
+      } else {
+        // Normal static target arrival
+        if (miner.state === 'moving') {
+          miner.state = 'setting_up';
+          miner.setupCompleteTime = now + MINER_SETUP_TIME_MS;
+          game.addEvent(`[${miner.teamName}] Miner arrived at (${tx},${ty}) — setting up (60s)`);
+        }
       }
+
       toKeep.push(miner);
       continue;
     }
@@ -846,6 +1055,49 @@ function processMinerMovement(game) {
   game.deployedMiners = toKeep;
 }
 
+// === Moon Orbit Simulation (new for moon motion) ===
+// Moons move very slowly in approximate circular orbits around gas giant.
+// Each has its own speed/interval for variety.
+function processMoonOrbits(game) {
+  if (!game.map || !game.map.anomalies || !game.map.gasGiant) return;
+
+  const gas = game.map.gasGiant;
+  const now = Date.now();
+  const size = game.mapSize || 13;
+
+  game.map.anomalies.forEach((a) => {
+    if (!a.orbitRadius || !a.moveIntervalTicks) return; // only moons have this
+
+    const interval = a.moveIntervalTicks || 600; // default ~10 min
+    const lastMove = a.lastMoveTime || 0;
+
+    if (now - lastMove < interval * 1000) return; // not time to move yet
+
+    // Update phase
+    const angleStep = (2 * Math.PI) / 12; // ~30 degrees per move, enough for ~1 cell
+    a.phase = (a.phase || 0) + (angleStep * (a.orbitDirection || 1));
+
+    // Calculate new position
+    const newX = Math.round(gas.x + a.orbitRadius * Math.cos(a.phase));
+    const newY = Math.round(gas.y + a.orbitRadius * Math.sin(a.phase));
+
+    // Clamp and avoid gas giant
+    let finalX = Math.max(1, Math.min(size - 2, newX));
+    let finalY = Math.max(1, Math.min(size - 2, newY));
+
+    if (finalX === gas.x && finalY === gas.y) {
+      // nudge away
+      finalX = gas.x + (Math.random() > 0.5 ? 1 : -1);
+    }
+
+    a.x = finalX;
+    a.y = finalY;
+    a.lastMoveTime = now;
+
+    debugLog(game, `MOON MOVE: ${a.name} (${a.type}) to (${a.x},${a.y}) phase=${a.phase.toFixed(2)}`);
+  });
+}
+
 // MINING: Handle setup timers (Phase 3). Transition setting_up -> mining after 60s, with event.
 function processMinerSetup(game) {
   if (!game.deployedMiners || game.deployedMiners.length === 0) return;
@@ -920,13 +1172,151 @@ function processMinerMining(game) {
   }
 }
 
+// === PROBE RECONNAISSANCE (new functional system) ===
+// Fast-moving, short-lived units. They travel quickly, snapshot a small area (max 5 cells),
+// reveal anomalies for their team, then disappear.
+function processProbeMovement(game) {
+  if (!game.deployedProbes || game.deployedProbes.length === 0) return;
+  if (!game.map || !game.map.anomalies || !game.map.gasGiant) return;
+
+  const size = game.mapSize || 13;
+  const gasX = game.map.gasGiant.x;
+  const gasY = game.map.gasGiant.y;
+
+  const toKeep = [];
+
+  for (const probe of game.deployedProbes) {
+    if (probe.state !== 'moving') {
+      toKeep.push(probe);
+      continue;
+    }
+
+    // Fast movement — probes update position on most ticks
+    const shouldMove = (game.tickCounter % PROBE_MOVE_TICKS) === 0;
+    if (!shouldMove) {
+      toKeep.push(probe);
+      continue;
+    }
+
+    const tx = probe.targetX;
+    const ty = probe.targetY;
+
+    // Arrived at destination?
+    if (probe.x === tx && probe.y === ty) {
+      // Perform small snapshot (plus shape = center + 4 directions = 5 cells max)
+      const snapshotCells = [
+        { x: tx, y: ty },
+        { x: tx, y: ty - 1 },
+        { x: tx, y: ty + 1 },
+        { x: tx - 1, y: ty },
+        { x: tx + 1, y: ty }
+      ].filter(c => c.x >= 0 && c.x < size && c.y >= 0 && c.y < size);
+
+      let revealed = 0;
+      for (const cell of snapshotCells) {
+        for (const anom of game.map.anomalies) {
+          if (anom.x === cell.x && anom.y === cell.y) {
+            if (!anom.discoveredBy) anom.discoveredBy = {};
+            if (!anom.discoveredBy[probe.teamName]) {
+              anom.discoveredBy[probe.teamName] = true;
+              revealed++;
+            }
+          }
+        }
+      }
+
+      const msg = revealed > 0
+        ? `[${probe.teamName}] Probe completed snapshot near (${tx},${ty}) — revealed ${revealed} anomaly(ies)`
+        : `[${probe.teamName}] Probe completed snapshot near (${tx},${ty}) — nothing new`;
+      game.addEvent(msg);
+      debugLog(game, `PROBE SNAPSHOT: team=${probe.teamName} at=(${tx},${ty}) revealed=${revealed}`);
+
+      // Probe disappears after snapshot
+      continue;
+    }
+
+    // Move one step toward target (simple greedy, avoid gas giant)
+    let nx = probe.x;
+    let ny = probe.y;
+
+    const dx = tx - probe.x;
+    const dy = ty - probe.y;
+
+    if (Math.abs(dx) > Math.abs(dy)) {
+      nx = probe.x + Math.sign(dx);
+    } else if (dy !== 0) {
+      ny = probe.y + Math.sign(dy);
+    }
+
+    // Avoid gas giant
+    if (nx === gasX && ny === gasY) {
+      // Nudge sideways
+      if (probe.x !== gasX) nx = probe.x;
+      else ny = probe.y + (Math.random() > 0.5 ? 1 : -1);
+    }
+
+    // Clamp
+    nx = Math.max(0, Math.min(size - 1, nx));
+    ny = Math.max(0, Math.min(size - 1, ny));
+
+    probe.x = nx;
+    probe.y = ny;
+
+    toKeep.push(probe);
+  }
+
+  game.deployedProbes = toKeep;
+}
+
+// === Mineral Synthesis from Factories ===
+// Slow passive trickle of resources from every operational factory.
+// This provides a baseline "permanent flow" so teams don't completely starve
+// if they under-invest in mining rigs early on. Synthesis is much slower
+// than actual mining but is reliable and scales with number of factories.
+function processFactorySynthesis(game) {
+  if (!game.factories || game.factories.length === 0) return;
+
+  // Only run on the configured interval
+  if (game.tickCounter % FACTORY_SYNTHESIS_INTERVAL_TICKS !== 0) return;
+
+  const operationalFactoriesByTeam = {};
+
+  for (const f of game.factories) {
+    if (f.state !== 'operational') continue;
+    operationalFactoriesByTeam[f.teamName] = (operationalFactoriesByTeam[f.teamName] || 0) + 1;
+  }
+
+  for (const [teamName, count] of Object.entries(operationalFactoriesByTeam)) {
+    const team = game.getTeamByName(teamName);
+    if (!team || team.factoryHP <= 0) continue;
+
+    const gains = [];
+    for (const [resource, amountPerFactory] of Object.entries(FACTORY_SYNTHESIS_PER_FACTORY)) {
+      const total = amountPerFactory * count;
+      if (total > 0) {
+        team.resources[resource] = (team.resources[resource] || 0) + total;
+        gains.push(`+${total} ${resource}`);
+      }
+    }
+
+    if (gains.length > 0 && game.tickCounter % (FACTORY_SYNTHESIS_INTERVAL_TICKS * 3) === 0) {
+      debugLog(game, `SYNTHESIS: team=${teamName} (${count} factories) → ${gains.join(', ')}`);
+    }
+  }
+}
+
 // MINING helper: add yield resources to team (tunable distribution) + detailed event log
 function addMiningYieldToTeam(game, team, anomalyType, amount, siteKey = '') {
   if (!team || amount <= 0) return;
   const order = RESOURCE_ORDER;
-  let idxs = [0,1];
-  if (anomalyType === 'gas_cloud') idxs = [2,3];
-  else if (anomalyType === 'asteroid_cluster') idxs = [4,5];
+  let idxs = [0,1]; // default (large_moon and legacy major_moon)
+  if (anomalyType === 'small_moon' || anomalyType === 'normal_moon') {
+    idxs = [1, 2]; // small moons bias toward second + third resource for variety
+  } else if (anomalyType === 'gas_cloud') {
+    idxs = [2,3];
+  } else if (anomalyType === 'asteroid_cluster') {
+    idxs = [4,5];
+  }
 
   const primaryShare = Math.floor(amount * 0.7 / 2);
   const secondaryShare = Math.floor(amount * 0.3 / 4);
@@ -953,7 +1343,7 @@ function addMiningYieldToTeam(game, team, anomalyType, amount, siteKey = '') {
 }
 
 // MINING: deployMiner handler logic extracted for socket (Phase 1)
-function createDeployedMiner(game, teamName, targetX, targetY) {
+function createDeployedMiner(game, teamName, targetX, targetY, targetObject = null) {
   const team = game.getTeamByName(teamName);
   if (!team || team.availableMiners < 1) return { ok: false, error: 'No available miners' };
   if (!game.map || !game.map.starts) return { ok: false, error: 'Map not ready' };
@@ -990,6 +1380,7 @@ function createDeployedMiner(game, teamName, targetX, targetY) {
     state: 'moving',
     targetX: tx,
     targetY: ty,
+    targetObject: targetObject || null, // name/id of the anomaly/moon if object-targeted
     setupCompleteTime: null,
     miningSite: null
   };
@@ -1007,23 +1398,10 @@ function generateMapForGame(game) {
 
   const gasGiant = { x: center, y: center };
 
-  // Simple moon count scaling
-  const moonCount = size === 13 ? 5 : size === 15 ? 7 : 10;
-
-  const moons = [];
-  // Place moons in a rough ring, avoiding center and edges too much
-  const ringDistance = Math.floor(size * 0.28);
-  for (let i = 0; i < moonCount; i++) {
-    const angle = (i / moonCount) * Math.PI * 2;
-    let mx = Math.round(center + Math.cos(angle) * ringDistance);
-    let my = Math.round(center + Math.sin(angle) * ringDistance * 0.85);
-
-    // Clamp + jitter to avoid overlap with center
-    mx = Math.max(2, Math.min(size - 3, mx + (i % 3 - 1)));
-    my = Math.max(2, Math.min(size - 3, my + (Math.floor(i / 2) % 3 - 1)));
-
-    moons.push({ x: mx, y: my });
-  }
+  // Moon count scaling for large + small moons (replaces legacy static moons)
+  const baseMoonCount = size === 13 ? 6 : size === 15 ? 8 : 11;
+  const largeMoonCount = Math.max(3, Math.min(7, Math.floor(baseMoonCount * 0.55)));
+  const smallMoonCount = Math.max(2, baseMoonCount - largeMoonCount);
 
   // Assign one starting location per team, well spaced and away from center
   const starts = {};
@@ -1059,14 +1437,39 @@ function generateMapForGame(game) {
 
   game.map = {
     gasGiant,
-    moons,
     starts,   // teamName -> {x, y}
-    // MINING: anomalies array (Phase 2). Major moons visible always; others hidden until probed.
+    // Moons and other sites are now fully in anomalies (large_moon / small_moon + gas_cloud + asteroid_cluster)
     anomalies: []
   };
 
-  // MINING: Generate anomalies (major_moon ~ visible common sites; gas_cloud + asteroid_cluster hidden)
-  // Use deterministic-ish random based on code for reproducibility across reconnects.
+  // Initialize starting home base factories (1 per team, at their starting position)
+  game.factories = [];
+  for (const [teamName, pos] of Object.entries(starts)) {
+    const homeFactoryId = 'factory-home-' + teamName + '-' + Date.now();
+    game.factories.push({
+      id: homeFactoryId,
+      teamName,
+      x: pos.x,
+      y: pos.y,
+      state: 'operational',
+      isHome: true,
+      setupCompleteTime: null
+    });
+
+    // Give the team one initial build queue tied to their home factory
+    const team = game.teams.get(teamName);
+    if (team) {
+      team.buildQueues = [{
+        factoryId: homeFactoryId,
+        queue: [],
+        current: null
+      }];
+    }
+  }
+
+  // MINING: Generate anomalies. large_moon + small_moon are the functioning orbiting moons.
+  // gas_cloud + asteroid_cluster are static/hidden. Use seeded rand for reproducibility.
+
   const seedBase = (game.code || 'SEED').split('').reduce((a,c)=>a + c.charCodeAt(0), size);
   function seededRand(i) { return ((seedBase * 9301 + i * 49297) % 233280) / 233280; }
 
@@ -1098,20 +1501,56 @@ function generateMapForGame(game) {
     }
   }
 
-  // Major moons: use similar count to legacy moons (common, always visible)
-  const majorCount = Math.max(3, Math.min(7, moonCount));
-  placeAnomaly('major_moon', majorCount);
+  // === New: Named objects with movement for moons ===
+  // Generate short names: Prefix + - + 3-4 alphanum (e.g. M-A3K, G-7P2)
+  function generateShortName(prefix, seedIdx) {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // avoid confusing chars
+    let name = prefix + '-';
+    for (let i = 0; i < 3; i++) {
+      name += chars[Math.floor(seededRand(seedIdx + i) * chars.length)];
+    }
+    return name;
+  }
 
-  // Gas clouds (medium, hidden) 4-8 depending on size
+  // Large moons (visible, slower orbits, higher yield)
+  placeAnomaly('large_moon', largeMoonCount);
+
+  // Small moons (faster orbits on average, lower yield, different resource bias)
+  placeAnomaly('small_moon', smallMoonCount);
+
+  // Gas clouds (medium, hidden) - spread more evenly
   const gasCount = size === 13 ? 5 : size === 15 ? 6 : 8;
   placeAnomaly('gas_cloud', gasCount);
 
-  // Asteroid clusters (rare, hidden) 2-5
+  // Asteroid clusters (rare, hidden)
   const astCount = size === 13 ? 3 : size === 15 ? 4 : 5;
   placeAnomaly('asteroid_cluster', astCount);
 
+  // Assign names and orbit data to moons (large + small)
+  const moonTypes = ['large_moon', 'small_moon'];
+  anomalies.forEach((a, idx) => {
+    if (moonTypes.includes(a.type)) {
+      const prefix = a.type === 'large_moon' ? 'L' : 'S';
+      a.id = generateShortName(prefix, 100 + idx);
+      a.name = a.id;
+      // Orbit params: large moons slightly slower / more stable
+      a.orbitRadius = 3 + Math.floor(seededRand(200 + idx) * 4); // 3-6
+      a.baseIntervalMin = a.type === 'large_moon'
+        ? (8 + seededRand(300 + idx) * 4)
+        : (4 + seededRand(400 + idx) * 3);
+      a.moveIntervalTicks = Math.floor(a.baseIntervalMin * 60); // approx ticks (1s ticks)
+      a.phase = seededRand(500 + idx) * Math.PI * 2;
+      a.orbitDirection = 1; // counter-clockwise
+    } else {
+      // Static objects get names too for unified targeting
+      const prefix = a.type === 'gas_cloud' ? 'G' : 'A';
+      a.id = generateShortName(prefix, 600 + idx);
+      a.name = a.id;
+    }
+  });
+
   game.map.anomalies = anomalies;
-  console.log(`[MAP] Generated ${size}x${size} map for ${game.code} with ${moons.length} legacy moons + ${anomalies.length} mining anomalies`);
+  console.log(`[MAP] Generated ${size}x${size} map for ${game.code} with ${anomalies.length} anomalies (large_moon + small_moon + gas + asteroid)`);
 }
 
 // ============ SOCKET HANDLERS (Team + Role based) ============
@@ -1243,7 +1682,7 @@ io.on('connection', (socket) => {
       game.addEvent(`[${t.name}] starts with ${display}`);
     }
 
-    game.addEvent('GAME STARTED — Each team has different starting resources (specialization bias hidden). Builder: deploy your starting miner. War: you have 1 probe ready. Mine, trade, expand.');
+    game.addEvent('GAME STARTED — Each team has different starting resources (specialization bias hidden). Builder: you have enough to start building multiple miners immediately.');
     persistGameState(game);
     broadcastState(game);
     cb?.({ ok: true });
@@ -1260,8 +1699,9 @@ io.on('connection', (socket) => {
     const team = game.getTeamByName(info.teamName);
     if (!team || team.factoryHP <= 0) return cb?.({ ok: false });
 
-    // MINING: Allow 'miner' and 'probe' (discovery). (Phase 0/4)
-    if (type !== 'frigate' && type !== 'destroyer' && type !== 'miner' && type !== 'probe') {
+    // Allow new infrastructure types (factory, admiral, capitol)
+    if (type !== 'frigate' && type !== 'destroyer' && type !== 'miner' && type !== 'probe' &&
+        type !== 'factory' && type !== 'admiral' && type !== 'capitol') {
       return cb?.({ ok: false, error: 'Invalid production type' });
     }
 
@@ -1269,15 +1709,31 @@ io.on('connection', (socket) => {
     if (!team.canAfford(cost)) {
       return cb?.({ ok: false, error: 'Not enough resources' });
     }
-    if (team.buildQueue.length >= MAX_QUEUE) {
-      return cb?.({ ok: false, error: 'Queue full (max 4)' });
+
+    // NEW: Multi-queue system — one queue per operational factory.
+    // For now, append to the first queue that has room (max 4 per queue).
+    // Future: UI will let Builder choose which factory/queue to use.
+    const MAX_QUEUE_PER_FACTORY = 4;
+
+    let targetQueue = null;
+    for (const q of team.buildQueues) {
+      if (q.queue.length < MAX_QUEUE_PER_FACTORY) {
+        targetQueue = q;
+        break;
+      }
     }
 
-    // Deduct the exact multi-resource cost when production starts (per prompt)
-    team.deduct(cost);
-    team.buildQueue.push(type);
+    if (!targetQueue) {
+      return cb?.({ ok: false, error: 'All factory queues are full (max 4 per factory)' });
+    }
 
-    game.addEvent(`[${info.teamName}] Builder queued 1 ${type.toUpperCase()}`);
+    // Deduct the exact multi-resource cost when production starts
+    team.deduct(cost);
+    targetQueue.queue.push(type);
+
+    const factoryLabel = targetQueue.factoryId === 'home' ? 'Home Base' : 'Forward Factory';
+    game.addEvent(`[${info.teamName}] Builder queued 1 ${type.toUpperCase()} at ${factoryLabel}`);
+
     persistGameState(game);
     broadcastState(game);
     cb?.({ ok: true });
@@ -1285,14 +1741,14 @@ io.on('connection', (socket) => {
 
   // MINING: Builder deploys an available miner to a map target (Phase 1)
   // For v1: Builder can deploy and (later) give move orders. War will also see miners.
-  socket.on('deployMiner', ({ targetX, targetY }, cb) => {
+  socket.on('deployMiner', ({ targetX, targetY, targetObject }, cb) => {
     const info = socketToPlayer.get(socket.id);
     if (!info || info.role !== 'builder') return cb?.({ ok: false, error: 'Only the Builder can deploy miners' });
 
     const game = info.game;
     if (game.status !== 'running') return cb?.({ ok: false });
 
-    const res = createDeployedMiner(game, info.teamName, targetX, targetY);
+    const res = createDeployedMiner(game, info.teamName, targetX, targetY, targetObject);
     if (!res.ok) return cb?.(res);
 
     persistGameState(game);
@@ -1301,7 +1757,7 @@ io.on('connection', (socket) => {
   });
 
   // MINING: Move/redirect an existing deployed miner (Phase 1, callable by Builder or War for v1)
-  socket.on('moveMiner', ({ minerId, targetX, targetY }, cb) => {
+  socket.on('moveMiner', ({ minerId, targetX, targetY, targetObject }, cb) => {
     const info = socketToPlayer.get(socket.id);
     if (!info || (info.role !== 'builder' && info.role !== 'war')) {
       return cb?.({ ok: false, error: 'Builder or War Commander can command miners' });
@@ -1330,16 +1786,18 @@ io.on('connection', (socket) => {
 
     miner.targetX = tx;
     miner.targetY = ty;
+    if (targetObject) miner.targetObject = targetObject;
 
     game.addEvent(`[${info.teamName}] Miner re-tasked to (${miner.targetX},${miner.targetY})`);
-    debugLog(game, `MOVE MINER: team=${info.teamName} id=${minerId} newTarget=(${tx},${ty})`);
+    debugLog(game, `MOVE MINER: team=${info.teamName} id=${minerId} newTarget=(${tx},${ty}) targetObject=${targetObject || 'none'}`);
     persistGameState(game);
     broadcastState(game);
     cb?.({ ok: true });
   });
 
-  // Launch probe scan — War Commander tool (per playtest). Consumes 1 probe if available.
-  // Builder still produces the probes; War Commander uses them for discovery.
+  // Launch probe — War Commander deploys a short-lived fast-moving reconnaissance unit.
+  // The probe travels quickly to the chosen location, takes a small snapshot (≤5 cells),
+  // reveals anomalies for the team, and then disappears.
   socket.on('launchProbe', ({ x, y }, cb) => {
     const info = socketToPlayer.get(socket.id);
     if (!info || info.role !== 'war') return cb?.({ ok: false, error: 'Only the War Commander can launch probes' });
@@ -1350,35 +1808,35 @@ io.on('connection', (socket) => {
     const team = game.getTeamByName(info.teamName);
     if (!team || (team.probes || 0) < 1) return cb?.({ ok: false, error: 'No probes available (build more)' });
 
-    if (!game.map || !game.map.anomalies) return cb?.({ ok: false, error: 'No map' });
+    if (!game.map || !game.map.starts || !game.map.anomalies) return cb?.({ ok: false, error: 'No map' });
 
-    // Consume probe
+    // Consume one ready probe
     team.probes--;
 
-    const px = Math.floor(x), py = Math.floor(y);
-    const radius = PROBE_RADIUS;
-    let revealed = 0;
-    const size = game.mapSize || 13;
+    const start = game.map.starts[info.teamName] || { x: 1, y: 1 };
+    const tx = Math.max(0, Math.min((game.mapSize || 13) - 1, Math.floor(x)));
+    const ty = Math.max(0, Math.min((game.mapSize || 13) - 1, Math.floor(y)));
 
-    for (const anom of game.map.anomalies) {
-      const dist = Math.abs(anom.x - px) + Math.abs(anom.y - py); // Manhattan
-      if (dist <= radius) {
-        if (!anom.discoveredBy) anom.discoveredBy = {};
-        if (!anom.discoveredBy[info.teamName]) {
-          anom.discoveredBy[info.teamName] = true;
-          revealed++;
-        }
-      }
-    }
+    // Create a mobile probe entity (quick travel, small snapshot on arrival)
+    const probe = {
+      id: 'probe-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7),
+      teamName: info.teamName,
+      x: start.x,
+      y: start.y,
+      targetX: tx,
+      targetY: ty,
+      state: 'moving',
+      launchTime: Date.now()
+    };
 
-    const msg = revealed > 0
-      ? `[${info.teamName}] Probe revealed ${revealed} anomaly(ies) near (${px},${py})`
-      : `[${info.teamName}] Probe scanned near (${px},${py}) — no new anomalies`;
-    game.addEvent(msg);
+    game.deployedProbes.push(probe);
+
+    game.addEvent(`[${info.teamName}] Probe launched toward (${tx},${ty}) — traveling fast`);
+    debugLog(game, `PROBE LAUNCH: team=${info.teamName} from=(${start.x},${start.y}) target=(${tx},${ty})`);
 
     persistGameState(game);
     broadcastState(game);
-    cb?.({ ok: true, revealed });
+    cb?.({ ok: true });
   });
 
   // War Commander-only action

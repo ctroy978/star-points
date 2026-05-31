@@ -84,8 +84,9 @@ function setMapTarget(x, y) {
 window.setMapTarget = setMapTarget;
 
 /* ============================================================
-   Builder Tab Specific Helpers
-   These support direct miner direction from the Builder UI panel.
+   Builder Tab Specific Helpers (DEPRECATED for miner control)
+   Miners are no longer directed from the Builder UI.
+   These remain for shared coordinate helpers used by probes (War).
    ============================================================ */
 
 // Deploy using the Builder tab's own coordinate inputs

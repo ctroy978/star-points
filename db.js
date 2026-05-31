@@ -29,6 +29,7 @@ function initDb() {
       fighters INTEGER NOT NULL DEFAULT 0,
       canons INTEGER NOT NULL DEFAULT 0,
       factory_hp INTEGER NOT NULL DEFAULT 100,
+      build_queues_json TEXT,  -- one build queue per operational factory
       FOREIGN KEY(game_code) REFERENCES games(code) ON DELETE CASCADE,
       UNIQUE(game_code, name)
     );
@@ -59,7 +60,7 @@ function initDb() {
       game_code TEXT PRIMARY KEY,
       gas_giant_x INTEGER NOT NULL,
       gas_giant_y INTEGER NOT NULL,
-      moons TEXT NOT NULL, -- JSON array of {x,y}
+      moons TEXT NOT NULL, -- JSON array of {x,y} (legacy; no longer populated — moons now live in anomalies as large_moon/small_moon)
       FOREIGN KEY(game_code) REFERENCES games(code) ON DELETE CASCADE
     );
 
@@ -94,6 +95,8 @@ function initDb() {
     `ALTER TABLE teams ADD COLUMN available_miners INTEGER DEFAULT 0`,
     `ALTER TABLE teams ADD COLUMN probes INTEGER DEFAULT 0`,
     `ALTER TABLE teams ADD COLUMN deployed_miners_json TEXT`,
+    // Factory multi-queue system (one build queue per operational factory)
+    `ALTER TABLE teams ADD COLUMN build_queues_json TEXT`,
     // MINING: anomalies (with discovery) JSON on map table
     `ALTER TABLE game_maps ADD COLUMN anomalies TEXT`
   ];
@@ -199,9 +202,10 @@ function upsertTeam(gameCode, teamName, initialData = {}) {
     INSERT INTO teams (
       game_code, name,
       resources_json, frigates, destroyers, buildings_json,
-      factory_hp, available_miners, probes, deployed_miners_json
+      factory_hp, available_miners, probes, deployed_miners_json,
+      build_queues_json
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(game_code, name) DO UPDATE SET
       resources_json = excluded.resources_json,
       frigates = excluded.frigates,
@@ -210,7 +214,8 @@ function upsertTeam(gameCode, teamName, initialData = {}) {
       factory_hp = excluded.factory_hp,
       available_miners = excluded.available_miners,
       probes = excluded.probes,
-      deployed_miners_json = excluded.deployed_miners_json
+      deployed_miners_json = excluded.deployed_miners_json,
+      build_queues_json = excluded.build_queues_json
   `);
 
   stmt.run(
@@ -223,7 +228,8 @@ function upsertTeam(gameCode, teamName, initialData = {}) {
     initialData.factoryHP ?? 100,
     initialData.availableMiners ?? 0,
     initialData.probes ?? 0,
-    initialData.deployedMiners ? JSON.stringify(initialData.deployedMiners) : null
+    initialData.deployedMiners ? JSON.stringify(initialData.deployedMiners) : null,
+    initialData.buildQueues ? JSON.stringify(initialData.buildQueues) : null
   );
 }
 
