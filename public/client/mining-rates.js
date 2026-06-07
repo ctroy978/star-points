@@ -39,11 +39,76 @@ window.ANOMALY_LABELS = {
   asteroid_cluster: 'Asteroid Cluster'
 };
 
-/** True when this team has probed the site and unlocked resource intel. */
-window.isAnomalyDiscoveredByTeam = function(anomaly, teamName) {
+window.ANOMALY_TERRAIN_PRIORITY = {
+  large_moon: 100,
+  major_moon: 90,
+  small_moon: 80,
+  normal_moon: 70,
+  gas_cloud: 40,
+  asteroid_cluster: 10
+};
+
+window.isMoonAnomalyType = function(type) {
+  return type === 'large_moon' || type === 'small_moon' ||
+    type === 'major_moon' || type === 'normal_moon';
+};
+
+/** When multiple anomalies share a cell (e.g. orbiting moon over static asteroid), pick display/mining terrain. */
+window.getPrimaryAnomalyAt = function(anomalies, x, y) {
+  const atCell = (anomalies || []).filter(a => a.x === x && a.y === y);
+  if (atCell.length === 0) return null;
+  if (atCell.length === 1) return atCell[0];
+  const pri = window.ANOMALY_TERRAIN_PRIORITY;
+  let best = atCell[0];
+  let bestScore = pri[best.type] || 0;
+  for (let i = 1; i < atCell.length; i++) {
+    const score = pri[atCell[i].type] || 0;
+    if (score > bestScore) {
+      best = atCell[i];
+      bestScore = score;
+    }
+  }
+  return best;
+};
+
+/** True when this team has probed or surveyed the site and unlocked resource intel. */
+window.isAnomalyDiscoveredByTeam = function(anomaly, teamName, stateOrRevealedIds) {
   if (!anomaly || !teamName) return false;
   const db = anomaly.discoveredBy || {};
-  return !!db[teamName];
+  if (db[teamName]) return true;
+  const revealed = Array.isArray(stateOrRevealedIds)
+    ? stateOrRevealedIds
+    : (stateOrRevealedIds?.revealedAnomalyIds || []);
+  return !!(anomaly.id && revealed.includes(anomaly.id));
+};
+
+/** Whether this anomaly should appear on the map for the viewing player (team-shared intel). */
+window.isAnomalyVisibleForTeam = function(anomaly, state) {
+  if (!anomaly) return false;
+  if (window.isMoonAnomalyType(anomaly.type)) return true;
+
+  const team = state?.myTeam;
+  if (!team) return true;
+
+  if (window.isAnomalyDiscoveredByTeam(anomaly, team)) return true;
+
+  const revealed = state.revealedAnomalyIds || [];
+  if (anomaly.id && revealed.includes(anomaly.id)) return true;
+
+  const miners = state.deployedMiners || [];
+  for (const m of miners) {
+    if (m.teamName === team && (m.state === 'mining' || m.state === 'setting_up') &&
+        m.x === anomaly.x && m.y === anomaly.y) {
+      return true;
+    }
+  }
+
+  return false;
+};
+
+window.getVisibleAnomaliesForTeam = function(state) {
+  const raw = state?.map?.anomalies || [];
+  return raw.filter(a => window.isAnomalyVisibleForTeam(a, state));
 };
 
 /** Mirror server addMiningYieldToTeam distribution for a single rig payout. */

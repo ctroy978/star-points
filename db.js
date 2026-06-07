@@ -100,7 +100,15 @@ function initDb() {
     `ALTER TABLE teams ADD COLUMN available_factories INTEGER DEFAULT 0`,
     `ALTER TABLE games ADD COLUMN factories_json TEXT`,
     // MINING: anomalies (with discovery) JSON on map table
-    `ALTER TABLE game_maps ADD COLUMN anomalies TEXT`
+    `ALTER TABLE game_maps ADD COLUMN anomalies TEXT`,
+    // Map fleets + admiral roster / peace flags
+    `ALTER TABLE games ADD COLUMN deployed_fleets_json TEXT`,
+    `ALTER TABLE teams ADD COLUMN available_admirals INTEGER DEFAULT 0`,
+    `ALTER TABLE teams ADD COLUMN capitol_ships INTEGER DEFAULT 0`,
+    `ALTER TABLE teams ADD COLUMN admiral_roster_json TEXT`,
+    `ALTER TABLE teams ADD COLUMN peace_with_json TEXT`,
+    `ALTER TABLE teams ADD COLUMN drone_wings INTEGER DEFAULT 1`,
+    `ALTER TABLE games ADD COLUMN deployed_drone_wings_json TEXT`
   ];
   for (const sql of upgrades) {
     try { db.exec(sql); } catch (e) {}
@@ -136,8 +144,6 @@ function loadAllGames() {
   for (const g of games) {
     const teams = getDb().prepare('SELECT * FROM teams WHERE game_code = ?').all(g.code);
     const players = getDb().prepare('SELECT * FROM players WHERE game_code = ?').all(g.code);
-    const fleets = getDb().prepare('SELECT * FROM fleets WHERE game_code = ?').all(g.code);
-
     // Load map data if present
     const mapRow = getDb().prepare('SELECT * FROM game_maps WHERE game_code = ?').get(g.code);
     let mapData = null;
@@ -171,7 +177,12 @@ function loadAllGames() {
         // MINING Phase 6
         availableMiners: t.available_miners ?? 0,
         probes: t.probes ?? 0,
+        droneWings: t.drone_wings ?? 1,
         availableFactories: t.available_factories ?? 0,
+        availableAdmirals: t.available_admirals ?? 0,
+        capitolShips: t.capitol_ships ?? 0,
+        admiralRoster: t.admiral_roster_json ? JSON.parse(t.admiral_roster_json) : null,
+        peaceWith: t.peace_with_json ? JSON.parse(t.peace_with_json) : null,
         deployedMiners: t.deployed_miners_json ? JSON.parse(t.deployed_miners_json) : null,
         buildQueues: t.build_queues_json ? JSON.parse(t.build_queues_json) : null
       })),
@@ -180,16 +191,11 @@ function loadAllGames() {
         teamName: p.team_name,
         role: p.role
       })),
-      fleets: fleets.map(f => ({
-        from: f.from_team,
-        to: f.to_team,
-        frigates: f.frigates ?? f.fighters ?? 0,
-        fighters: f.fighters, // legacy
-        arrivalTime: f.arrival_time
-      })),
       mapData,
       teamStarts: starts,
-      factories: g.factories_json ? JSON.parse(g.factories_json) : null
+      factories: g.factories_json ? JSON.parse(g.factories_json) : null,
+      deployedFleets: g.deployed_fleets_json ? JSON.parse(g.deployed_fleets_json) : null,
+      deployedDroneWings: g.deployed_drone_wings_json ? JSON.parse(g.deployed_drone_wings_json) : null
     });
   }
   return result;
@@ -207,10 +213,11 @@ function upsertTeam(gameCode, teamName, initialData = {}) {
     INSERT INTO teams (
       game_code, name,
       resources_json, frigates, destroyers, buildings_json,
-      factory_hp, available_miners, probes, available_factories, deployed_miners_json,
-      build_queues_json
+      factory_hp, available_miners, probes, drone_wings, available_factories,
+      available_admirals, capitol_ships, admiral_roster_json, peace_with_json,
+      deployed_miners_json, build_queues_json
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(game_code, name) DO UPDATE SET
       resources_json = excluded.resources_json,
       frigates = excluded.frigates,
@@ -219,7 +226,12 @@ function upsertTeam(gameCode, teamName, initialData = {}) {
       factory_hp = excluded.factory_hp,
       available_miners = excluded.available_miners,
       probes = excluded.probes,
+      drone_wings = excluded.drone_wings,
       available_factories = excluded.available_factories,
+      available_admirals = excluded.available_admirals,
+      capitol_ships = excluded.capitol_ships,
+      admiral_roster_json = excluded.admiral_roster_json,
+      peace_with_json = excluded.peace_with_json,
       deployed_miners_json = excluded.deployed_miners_json,
       build_queues_json = excluded.build_queues_json
   `);
@@ -234,7 +246,12 @@ function upsertTeam(gameCode, teamName, initialData = {}) {
     initialData.factoryHP ?? 100,
     initialData.availableMiners ?? 0,
     initialData.probes ?? 0,
+    initialData.droneWings ?? 1,
     initialData.availableFactories ?? 0,
+    initialData.availableAdmirals ?? 0,
+    initialData.capitolShips ?? 0,
+    initialData.admiralRoster ? JSON.stringify(initialData.admiralRoster) : null,
+    initialData.peaceWith ? JSON.stringify(initialData.peaceWith) : null,
     initialData.deployedMiners ? JSON.stringify(initialData.deployedMiners) : null,
     initialData.buildQueues ? JSON.stringify(initialData.buildQueues) : null
   );
@@ -245,6 +262,20 @@ function saveGameFactories(gameCode, factories) {
     UPDATE games SET factories_json = ? WHERE code = ?
   `);
   stmt.run(JSON.stringify(factories), gameCode);
+}
+
+function saveGameDeployedFleets(gameCode, deployedFleets) {
+  const stmt = getDb().prepare(`
+    UPDATE games SET deployed_fleets_json = ? WHERE code = ?
+  `);
+  stmt.run(JSON.stringify(deployedFleets || []), gameCode);
+}
+
+function saveGameDeployedDroneWings(gameCode, deployedDroneWings) {
+  const stmt = getDb().prepare(`
+    UPDATE games SET deployed_drone_wings_json = ? WHERE code = ?
+  `);
+  stmt.run(JSON.stringify(deployedDroneWings || []), gameCode);
 }
 
 function updateTeamResources(gameCode, teamName, updates) {
@@ -285,29 +316,6 @@ function getPlayerRole(gameCode, teamName, playerName) {
     'SELECT role FROM players WHERE game_code = ? AND team_name = ? AND name = ?'
   ).get(gameCode, teamName, playerName);
   return row ? row.role : null;
-}
-
-// === FLEET OPERATIONS ===
-
-function addFleet(gameCode, fromTeam, toTeam, fighters, arrivalTime) {
-  getDb().prepare(`
-    INSERT INTO fleets (game_code, from_team, to_team, fighters, arrival_time)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(gameCode, fromTeam, toTeam, fighters, arrivalTime);
-}
-
-function removeFleetsByArrival(gameCode, arrivalTimeThreshold) {
-  getDb().prepare(
-    'DELETE FROM fleets WHERE game_code = ? AND arrival_time <= ?'
-  ).run(gameCode, arrivalTimeThreshold);
-}
-
-function getFleetsForGame(gameCode) {
-  return getDb().prepare('SELECT * FROM fleets WHERE game_code = ?').all(gameCode);
-}
-
-function clearFleetsForGame(gameCode) {
-  getDb().prepare('DELETE FROM fleets WHERE game_code = ?').run(gameCode);
 }
 
 // === MAP PERSISTENCE (for saved games feature) ===
@@ -376,6 +384,8 @@ module.exports = {
   getDb,
   saveGame,
   saveGameFactories,
+  saveGameDeployedFleets,
+  saveGameDeployedDroneWings,
   loadAllGames,
   deleteGame,
   upsertTeam,
@@ -384,10 +394,6 @@ module.exports = {
   addOrUpdatePlayer,
   getPlayersForGame,
   getPlayerRole,
-  addFleet,
-  removeFleetsByArrival,
-  getFleetsForGame,
-  clearFleetsForGame,
   // Map persistence
   saveGameMap,
   saveTeamStarts,

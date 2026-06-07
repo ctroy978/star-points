@@ -2,6 +2,8 @@
 // Extracted production / build queue system (including multi-factory queues and mineral synthesis).
 // This module handles costs, times, queue processing, and passive synthesis from factories.
 
+const { createAdmiralEntry } = require('./fleets');
+
 const RESOURCE_ORDER = [
   'Fused Xenon',
   'Helium-3 Lattice',
@@ -19,7 +21,8 @@ const BUILD_COSTS = {
   probe:     [1, 1, 1, 0, 0, 1],
   factory:   [22, 16, 10, 14, 8, 6],
   admiral:   [10, 7, 5, 6, 4, 3],
-  capitol:   [35, 24, 15, 20, 12, 9]
+  capitol:   [35, 24, 15, 20, 12, 9],
+  drone_wing: [3, 2, 1, 3, 0, 1]
 };
 
 const BUILD_TIMES = {
@@ -29,7 +32,8 @@ const BUILD_TIMES = {
   probe: 18,
   factory: 180,
   admiral: 75,
-  capitol: 240
+  capitol: 240,
+  drone_wing: 28
 };
 
 const MAX_QUEUE_PER_FACTORY = 4;
@@ -97,8 +101,13 @@ function processBuilds(game) {
           else if (current.type === 'miner') team.availableMiners = (team.availableMiners || 0) + 1;
           else if (current.type === 'probe') team.probes = (team.probes || 0) + 1;
           else if (current.type === 'factory') team.availableFactories = (team.availableFactories || 0) + 1;
-          else if (current.type === 'admiral') team.availableAdmirals = (team.availableAdmirals || 0) + 1;
+          else if (current.type === 'admiral') {
+            if (!team.admiralRoster) team.admiralRoster = [];
+            team.admiralRoster.push(createAdmiralEntry());
+            team.availableAdmirals = team.admiralRoster.length;
+          }
           else if (current.type === 'capitol') team.capitolShips = (team.capitolShips || 0) + 1;
+          else if (current.type === 'drone_wing') team.droneWings = (team.droneWings || 0) + 1;
 
           const factoryLabel = operationalFactories[i]?.isHome ? 'Home Base' : 'Forward Factory';
           game.addEvent(`[${team.name}] completed 1 ${current.type.toUpperCase()} at ${factoryLabel}`);

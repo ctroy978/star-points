@@ -104,7 +104,7 @@ function isTransitUnitState(state) {
   return state === 'moving' || state === 'setting_up';
 }
 
-function addTransitBadge(cell, symbol, color, corner) {
+function addTransitBadge(cell, symbol, color, corner, fontSizePx = 8) {
   cell.style.position = 'relative';
   const badge = document.createElement('span');
   badge.className = 'transit-badge';
@@ -115,7 +115,7 @@ function addTransitBadge(cell, symbol, color, corner) {
     'bottom-right': 'bottom:0;right:1px;'
   };
   badge.textContent = symbol;
-  badge.style.cssText = `position:absolute;${positions[corner] || positions['top-left']}font-size:8px;line-height:1;color:${color};text-shadow:0 0 2px #000;pointer-events:none;`;
+  badge.style.cssText = `position:absolute;${positions[corner] || positions['top-left']}font-size:${fontSizePx}px;line-height:1;font-weight:bold;color:${color};text-shadow:0 0 3px #000;pointer-events:none;`;
   cell.appendChild(badge);
 }
 
@@ -163,24 +163,36 @@ function renderMap(state) {
     }
 
     const gasGiant = mapData.gasGiant || { x: Math.floor(size / 2), y: Math.floor(size / 2) };
-    const myTeamForDisc = state.myTeam;
-    const rawAnomalies = mapData.anomalies || [];
-    const anomalies = rawAnomalies.filter(a => {
-      if (a.type === 'large_moon' || a.type === 'small_moon' || a.type === 'major_moon' || a.type === 'normal_moon') return true;
-      const db = a.discoveredBy || {};
-      return !!(myTeamForDisc && db[myTeamForDisc]);
-    });
+    const anomalies = typeof window.getVisibleAnomaliesForTeam === 'function'
+      ? window.getVisibleAnomaliesForTeam(state)
+      : (mapData.anomalies || []);
 
     const myMiners = (state.deployedMiners || []).filter(m => m.teamName === state.myTeam);
     const myFactories = (state.factories || []).filter(f => f.teamName === state.myTeam);
+    const myFleets = (state.deployedFleets || []).filter(f => f.teamName === state.myTeam);
+    const enemyFleets = (state.deployedFleets || []).filter(f => f.teamName !== state.myTeam);
+    const myDroneWings = (state.deployedDroneWings || []).filter(w => w.teamName === state.myTeam);
+    const enemyDroneWings = (state.deployedDroneWings || []).filter(w => w.teamName !== state.myTeam);
     const myProbes = (state.deployedProbes || []).filter(p => p.teamName === state.myTeam);
     const probeAt = {};
     myProbes.forEach(p => {
       probeAt[`${p.x},${p.y}`] = p;
     });
 
-    const anomalyAt = {};
-    anomalies.forEach(a => { anomalyAt[`${a.x},${a.y}`] = a; });
+    const tacticalPingCells = new Set();
+    myProbes.forEach(p => {
+      if (p.mode !== 'tactical' || p.state !== 'pinging') return;
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = -1; dy <= 1; dy++) {
+          if (Math.abs(dx) + Math.abs(dy) > 1) continue;
+          const px = p.x + dx;
+          const py = p.y + dy;
+          if (px >= 0 && px < size && py >= 0 && py < size) {
+            tacticalPingCells.add(`${px},${py}`);
+          }
+        }
+      }
+    });
 
     for (let row = 0; row < size; row++) {
       const rowLabel = document.createElement('div');
@@ -197,6 +209,14 @@ function renderMap(state) {
 
         const isGasGiant = (col === gasGiant.x && row === gasGiant.y);
         const isMyStart = myStart && col === Number(myStart.x) && row === Number(myStart.y);
+        const cellKeyForPing = `${col},${row}`;
+
+        if (tacticalPingCells.has(cellKeyForPing) && !isGasGiant) {
+          cell.style.boxShadow = 'inset 0 0 0 1px rgba(255,120,60,0.55)';
+          if (!cell.style.background || cell.style.background === '') {
+            cell.style.background = 'rgba(40,12,0,0.35)';
+          }
+        }
 
         if (isGasGiant) {
           cell.classList.add('gas-giant');
@@ -206,8 +226,9 @@ function renderMap(state) {
           cell.style.textShadow = '0 0 4px #ffcc33';
         }
 
-        const cellKeyForAnom = `${col},${row}`;
-        const anom = anomalyAt[cellKeyForAnom];
+        const anom = typeof window.getPrimaryAnomalyAt === 'function'
+          ? window.getPrimaryAnomalyAt(anomalies, col, row)
+          : anomalies.find(a => a.x === col && a.y === row);
         if (anom && !isGasGiant) {
           if (anom.type === 'large_moon' || anom.type === 'major_moon') {
             cell.textContent = '◉';
@@ -249,6 +270,20 @@ function renderMap(state) {
         const hasTerrain = isGasGiant || !!anom || isMyStart;
         const cellKey = `${col},${row}`;
 
+        const activeMinersHere = myMiners.filter(m =>
+          m.x === col && m.y === row && m.state === 'mining'
+        );
+        if (activeMinersHere.length > 0) {
+          const sym = '⛏';
+          const label = activeMinersHere.length > 1 ? `${sym}${activeMinersHere.length}` : sym;
+          const color = '#66ffaa';
+          if (hasTerrain) {
+            addTransitBadge(cell, label, color, 'bottom-left', 10);
+          } else {
+            setTransitCellIcon(cell, label, color, '#002211', '12px');
+          }
+        }
+
         const transitMinersHere = myMiners.filter(m =>
           m.x === col && m.y === row && isTransitUnitState(m.state)
         );
@@ -281,12 +316,70 @@ function renderMap(state) {
           }
         }
 
+        const myFleetsHere = myFleets.filter(f => f.x === col && f.y === row);
+        if (myFleetsHere.length > 0) {
+          const anyMoving = myFleetsHere.some(f => f.state === 'moving');
+          const initial = (myFleetsHere[0].admiralName || 'C').charAt(0).toUpperCase();
+          const sym = anyMoving ? `${initial}→` : `${initial}■`;
+          const label = myFleetsHere.length > 1 ? `${sym}${myFleetsHere.length}` : sym;
+          const color = '#ffaa44';
+          const terrainOrOther = hasTerrain || transitMinersHere.length > 0 || transitFactoriesHere.length > 0;
+          const badgeSize = anyMoving ? 8 : 10;
+          if (terrainOrOther) {
+            addTransitBadge(cell, label, color, 'bottom-left', badgeSize);
+          } else if (!transitMinersHere.length && !transitFactoriesHere.length) {
+            setTransitCellIcon(cell, label, color, '#221100', anyMoving ? '11px' : '12px');
+          } else {
+            addTransitBadge(cell, label, color, 'bottom-left', badgeSize);
+          }
+        }
+
+        const myWingsHere = myDroneWings.filter(w => w.x === col && w.y === row);
+        if (myWingsHere.length > 0) {
+          const moving = myWingsHere.some(w => w.state === 'moving');
+          const sym = moving ? '†→' : '†';
+          const label = myWingsHere.length > 1 ? `${sym}${myWingsHere.length}` : sym;
+          const wingOnTerrain = hasTerrain || transitMinersHere.length > 0 || transitFactoriesHere.length > 0 ||
+            myFleetsHere.length > 0;
+          if (wingOnTerrain) {
+            addTransitBadge(cell, label, '#ffaa66', 'bottom-right', 12);
+          } else {
+            setTransitCellIcon(cell, label, '#ffaa66', '#2a1800', '15px');
+            cell.style.textShadow = '0 0 4px #ff8800';
+          }
+        }
+
+        const enemyWingsHere = enemyDroneWings.filter(w => w.x === col && w.y === row);
+        if (enemyWingsHere.length > 0) {
+          const sym = enemyWingsHere[0].state === 'moving' ? '†→' : '†';
+          const label = enemyWingsHere.length > 1 ? `${sym}${enemyWingsHere.length}` : sym;
+          addTransitBadge(cell, label, '#ff6666', 'top-left', 12);
+        }
+
+        const enemyFleetsHere = enemyFleets.filter(f => f.x === col && f.y === row);
+        if (enemyFleetsHere.length > 0) {
+          const anyMoving = enemyFleetsHere.some(f => f.state === 'moving');
+          const initial = (enemyFleetsHere[0].admiralName || '?').charAt(0).toUpperCase();
+          const sym = anyMoving ? `${initial}→` : `${initial}■`;
+          const label = enemyFleetsHere.length > 1 ? `${sym}${enemyFleetsHere.length}` : sym;
+          addTransitBadge(cell, label, '#ff6666', myFleetsHere.length > 0 ? 'top-right' : 'bottom-left', 10);
+        }
+
         const probe = probeAt[cellKey];
         if (probe) {
-          const sym = probe.state === 'scanning' ? '◎' : '✧';
-          const color = probe.state === 'scanning' ? '#ffdd66' : '#66ccff';
-          const bg = probe.state === 'scanning' ? '#221a00' : '#001133';
-          const terrainOrOtherTransit = hasTerrain || transitMinersHere.length > 0 || transitFactoriesHere.length > 0;
+          let sym = '✧';
+          let color = '#66ccff';
+          let bg = '#001133';
+          if (probe.mode === 'tactical') {
+            if (probe.state === 'pinging') { sym = '◉'; color = '#ff8844'; bg = '#331100'; }
+            else { sym = '✧'; color = '#ffaa66'; bg = '#221100'; }
+          } else if (probe.state === 'scanning') {
+            sym = '◎'; color = '#ffdd66'; bg = '#221a00';
+          } else {
+            sym = '✧'; color = '#66ccff'; bg = '#001133';
+          }
+          const terrainOrOtherTransit = hasTerrain || transitMinersHere.length > 0 || transitFactoriesHere.length > 0 ||
+            myFleetsHere.length > 0;
           if (terrainOrOtherTransit) {
             addTransitBadge(cell, sym, color, 'top-right');
           } else {
@@ -362,26 +455,31 @@ function buildCellInfo(state, col, row) {
   if (!state || !state.map) return null;
 
   const mapData = state.map;
-  const rawAnomalies = mapData.anomalies || [];
   const myTeam = state.myTeam;
   const myRole = state.myRole;
 
-  const visibleAnomalies = rawAnomalies.filter(a => {
-    if (a.type === 'large_moon' || a.type === 'small_moon') return true;
-    const db = a.discoveredBy || {};
-    return !!(myTeam && db[myTeam]);
-  });
+  const visibleAnomalies = typeof window.getVisibleAnomaliesForTeam === 'function'
+    ? window.getVisibleAnomaliesForTeam(state)
+    : (mapData.anomalies || []);
 
-  const anomHere = visibleAnomalies.find(a => a.x === col && a.y === row);
-  const myMinersHere = (state.deployedMiners || []).filter(m =>
-    m.teamName === myTeam && m.x === col && m.y === row
-  );
-  const myFactoriesHere = (state.factories || []).filter(f =>
-    f.teamName === myTeam && f.x === col && f.y === row
-  );
+  const anomHere = typeof window.getPrimaryAnomalyAt === 'function'
+    ? window.getPrimaryAnomalyAt(visibleAnomalies, col, row)
+    : visibleAnomalies.find(a => a.x === col && a.y === row);
+  const minersHere = (state.deployedMiners || []).filter(m => m.x === col && m.y === row);
+  const factoriesHere = (state.factories || []).filter(f => f.x === col && f.y === row);
+  const myMinersHere = minersHere.filter(m => m.teamName === myTeam);
+  const myFactoriesHere = factoriesHere.filter(f => f.teamName === myTeam);
+  const enemyMinersHere = minersHere.filter(m => m.teamName !== myTeam);
+  const enemyFactoriesHere = factoriesHere.filter(f => f.teamName !== myTeam);
   const myProbeHere = (state.deployedProbes || []).find(p =>
     p.teamName === myTeam && p.x === col && p.y === row
   );
+  const fleetsHere = (state.deployedFleets || []).filter(f => f.x === col && f.y === row);
+  const myFleetsHere = fleetsHere.filter(f => f.teamName === myTeam);
+  const enemyFleetsHere = fleetsHere.filter(f => f.teamName !== myTeam);
+  const wingsHere = (state.deployedDroneWings || []).filter(w => w.x === col && w.y === row);
+  const myWingsHere = wingsHere.filter(w => w.teamName === myTeam);
+  const enemyWingsHere = wingsHere.filter(w => w.teamName !== myTeam);
   const gasGiant = mapData.gasGiant;
   const isGasGiant = gasGiant && col === gasGiant.x && row === gasGiant.y;
 
@@ -406,7 +504,8 @@ function buildCellInfo(state, col, row) {
                       anomHere.type.replace('_', ' ');
     html += `<div class="section"><span class="object-name">${name}</span>${extra}<br><span style="color:#88aa99;">${typeLabel}</span>`;
 
-    if (myTeam && typeof window.isAnomalyDiscoveredByTeam === 'function' && window.isAnomalyDiscoveredByTeam(anomHere, myTeam)) {
+    if (myTeam && typeof window.isAnomalyDiscoveredByTeam === 'function' &&
+        window.isAnomalyDiscoveredByTeam(anomHere, myTeam, state)) {
       const rigsHere = typeof window.countActiveMinersAtSite === 'function'
         ? window.countActiveMinersAtSite(state.deployedMiners, col, row, myTeam)
         : 0;
@@ -419,13 +518,15 @@ function buildCellInfo(state, col, row) {
         html += `<br><span style="color:#448866; font-size:8px;">Current stack (${rigsHere} rigs): ${stacked}</span>`;
       }
     } else if (myTeam) {
-      html += `<br><span style="color:#335544; font-size:9px;">⛯ Resources unknown — probe this site to reveal yields</span>`;
+      html += `<br><span style="color:#335544; font-size:9px;">⛯ Resources unknown — probe or land a miner here to reveal yields</span>`;
     }
 
     html += `</div>`;
   }
 
-  const unitsHere = myMinersHere.length + myFactoriesHere.length + (myProbeHere ? 1 : 0);
+  const unitsHere = myMinersHere.length + myFactoriesHere.length + enemyMinersHere.length +
+    enemyFactoriesHere.length + myFleetsHere.length + enemyFleetsHere.length +
+    myWingsHere.length + enemyWingsHere.length + (myProbeHere ? 1 : 0);
   if (unitsHere > 0) {
     html += `<div class="section"><strong>Units at this site (${unitsHere}):</strong>`;
   }
@@ -479,13 +580,96 @@ function buildCellInfo(state, col, row) {
   }
 
   if (myProbeHere) {
+    const modeLabel = myProbeHere.mode === 'tactical' ? 'Tactical probe' : 'Survey probe';
+    const who = myProbeHere.launchedByRoleLabel || myProbeHere.launchedByRole || 'Teammate';
     html += `<div style="font-size:9px; color:#88aa99; margin:5px 0 1px;">Probes</div>`;
+    html += `<div style="margin:2px 0;">${modeLabel} <span style="color:#669977;">(${who})</span></div>`;
     if (myProbeHere.state === 'scanning') {
       const remain = myProbeHere.scanRemaining != null ? `${myProbeHere.scanRemaining}s` : '…';
-      html += `<div style="margin:2px 0;">◎ scanning area — results in ${remain}</div>`;
+      html += `<div style="margin:2px 0;">◎ surveying resources — ${remain} left</div>`;
+    } else if (myProbeHere.state === 'pinging') {
+      const remain = myProbeHere.pingRemaining != null ? `${myProbeHere.pingRemaining}s` : '…';
+      html += `<div style="margin:2px 0;">◉ pinging zone — enemy ships visible, ${remain} left</div>`;
     } else {
       html += `<div style="margin:2px 0;">✧ en route (~8s per cell)</div>`;
     }
+  }
+
+  if (myWingsHere.length > 0) {
+    html += `<div style="font-size:9px; color:#88aa99; margin:5px 0 1px;">Drone wings (${myTeam})</div>`;
+    myWingsHere.forEach(w => {
+      const stateLabel = w.state === 'moving' ? '→ moving' : '■ stationed';
+      html += `<div style="margin:2px 0;">${stateLabel} <span style="color:#ffaa66;">HP ${w.hp}</span></div>`;
+    });
+    if (myRole === 'war') {
+      html += `<div class="popup-actions">`;
+      myWingsHere.forEach(w => {
+        html += `<button class="popup-btn" onclick="orderDroneWingFromWar('${w.id}')">Order wing ${w.id.slice(-6)}</button>`;
+      });
+      html += `</div>`;
+    }
+  }
+
+  if (myFleetsHere.length > 0) {
+    html += `<div style="font-size:9px; color:#88aa99; margin:5px 0 1px;">Fleets (${myTeam})</div>`;
+    myFleetsHere.forEach(fl => {
+      const stateLabel = fl.state === 'moving' ? '→ moving' : '■ stationed';
+      const escorts = `${fl.frigates || 0}F + ${fl.destroyers || 0}D`;
+      html += `<div style="margin:2px 0;">${stateLabel} <strong>${fl.admiralName}</strong> (${escorts}, HP ${fl.capitolHP ?? '?'})</div>`;
+    });
+
+    if (myRole === 'war') {
+      const redirectable = myFleetsHere.filter(f => f.state === 'moving');
+      if (redirectable.length > 0) {
+        html += `<div class="popup-actions">`;
+        html += `<div style="font-size:9px; color:#88aa99; margin-bottom:2px;">Redirect fleet (War Commander):</div>`;
+        redirectable.forEach(fl => {
+          html += `<button class="popup-btn" onclick="redirectFleetFromPopup('${fl.id}')">Redirect ${fl.admiralName}</button>`;
+        });
+        html += `</div>`;
+      }
+      const stationed = myFleetsHere.filter(f => f.state === 'stationed');
+      if (stationed.length > 0) {
+        html += `<div class="popup-actions">`;
+        html += `<div style="font-size:9px; color:#88aa99; margin-bottom:2px;">Order stationed fleet:</div>`;
+        stationed.forEach(fl => {
+          html += `<button class="popup-btn" onclick="orderFleetFromPopup('${fl.id}')">Order ${fl.admiralName}</button>`;
+        });
+        html += `</div>`;
+      }
+    }
+  }
+
+  if (enemyWingsHere.length > 0) {
+    html += `<div style="font-size:9px; color:#88aa99; margin:5px 0 1px;">Enemy drone wings (intel)</div>`;
+    enemyWingsHere.forEach(w => {
+      const stateLabel = w.state === 'moving' ? '→ moving' : '■ stationed';
+      html += `<div style="margin:2px 0; color:#cc8888;">${stateLabel} HP ${w.hp} <span>(${w.teamName})</span></div>`;
+    });
+  }
+
+  if (enemyMinersHere.length > 0) {
+    html += `<div style="font-size:9px; color:#88aa99; margin:5px 0 1px;">Enemy miners (intel)</div>`;
+    enemyMinersHere.forEach(m => {
+      const stateLabel = m.state === 'mining' ? '⛏ mining' : (m.state === 'setting_up' ? '⏳ setting up' : '→ moving');
+      html += `<div style="margin:2px 0; color:#cc8888;">${stateLabel} <span>(${m.teamName})</span></div>`;
+    });
+  }
+
+  if (enemyFactoriesHere.length > 0) {
+    html += `<div style="font-size:9px; color:#88aa99; margin:5px 0 1px;">Enemy factories (intel)</div>`;
+    enemyFactoriesHere.forEach(f => {
+      let stateLabel = f.isHome ? '🏠 home' : (f.state === 'operational' ? '▶ operational' : f.state);
+      html += `<div style="margin:2px 0; color:#cc8888;">${stateLabel} <span>(${f.teamName})</span></div>`;
+    });
+  }
+
+  if (enemyFleetsHere.length > 0) {
+    html += `<div style="font-size:9px; color:#88aa99; margin:5px 0 1px;">Enemy fleets (intel)</div>`;
+    enemyFleetsHere.forEach(fl => {
+      const stateLabel = fl.state === 'moving' ? '→ moving' : '■ stationed';
+      html += `<div style="margin:2px 0; color:#cc8888;">${stateLabel} <strong>${fl.admiralName}</strong> (${fl.teamName})</div>`;
+    });
   }
 
   if (unitsHere > 0) {
@@ -508,6 +692,28 @@ function redirectFactoryFromPopup(factoryId, currentCol, currentRow) {
       factoryId: factoryId,
       action: 'move',
       instructions: `Redirect factory kit ${factoryId.slice(-6)} to a different moon`
+    });
+  }
+}
+
+function orderFleetFromPopup(fleetId) {
+  hideCellPopup();
+  if (typeof window.enterMapCommandMode === 'function') {
+    window.enterMapCommandMode('fleet', {
+      fleetId,
+      action: 'move',
+      instructions: `Order fleet to a new map cell`
+    });
+  }
+}
+
+function redirectFleetFromPopup(fleetId) {
+  hideCellPopup();
+  if (typeof window.enterMapCommandMode === 'function') {
+    window.enterMapCommandMode('fleet', {
+      fleetId,
+      action: 'redirect',
+      instructions: `Redirect en-route fleet to a new destination`
     });
   }
 }
@@ -536,4 +742,6 @@ window.renderMap = renderMap;
 window.buildCellInfo = buildCellInfo;
 window.redirectMinerFromPopup = redirectMinerFromPopup;
 window.redirectFactoryFromPopup = redirectFactoryFromPopup;
+window.orderFleetFromPopup = orderFleetFromPopup;
+window.redirectFleetFromPopup = redirectFleetFromPopup;
 window.closeCellPopup = closeCellPopup;

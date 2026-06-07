@@ -14,7 +14,16 @@
  * See ARCHITECTURE.md for current guidance on when to unify movement logic.
  */
 
-let commandMode = null; // { type, action, minerId?, factoryId?, instructions? }
+let commandMode = null; // { type, action, minerId?, factoryId?, fleetId?, instructions? }
+
+function requireBuilderRole(actionLabel) {
+  const last = (typeof lastState !== 'undefined') ? lastState : null;
+  if (!last || last.myRole !== 'builder') {
+    alert(`Only the Builder can ${actionLabel}.`);
+    return false;
+  }
+  return true;
+}
 
 /**
  * Converts numeric grid coordinates (col, row) to human-friendly map notation.
@@ -33,11 +42,16 @@ window.formatMapCoord = formatMapCoord;
 
 // Public API to enter command mode from a role panel (Builder, War, etc.)
 function enterMapCommandMode(type, options = {}) {
+  if (type === 'miner' && !requireBuilderRole('deploy or command mining rigs')) return;
+  if (type === 'factory' && !requireBuilderRole('deploy factory kits')) return;
+
   commandMode = {
     type: type || 'miner',
     action: options.action || 'auto',
     minerId: options.minerId || null,
     factoryId: options.factoryId || null,
+    fleetId: options.fleetId || null,
+    wingId: options.wingId || null,
     instructions: options.instructions || getDefaultInstructions(type)
   };
 
@@ -87,8 +101,20 @@ function getDefaultInstructions(type) {
   if (type === 'factory') {
     return 'Click a moon (◉ large or ○ small) to deploy a factory kit.';
   }
+  if (type === 'probe-survey') {
+    return 'Click a map cell for a survey probe. Travels ~8s/cell, scans a large area (30s) for hidden sites + resource yields. Does not reveal enemy ships.';
+  }
+  if (type === 'probe-tactical') {
+    return 'Click a map cell for a tactical probe. Travels ~8s/cell, then pings a small zone (~45s). Enemy ships in that zone are visible to your team while active.';
+  }
   if (type === 'probe') {
-    return 'Click a map cell to launch a probe. It travels ~8s per cell, scans the area for 30s on arrival, then reveals hidden sites + resources for your team.';
+    return 'Click a map cell to launch a probe (~8s per cell).';
+  }
+  if (type === 'fleet') {
+    return 'Click a map cell to order your fleet there (~10s per cell).';
+  }
+  if (type === 'droneWing') {
+    return 'Click a map cell to send your drone wing there (~6s per cell). Max 2 wings on map.';
   }
   return 'Click a destination on the map.';
 }
@@ -140,13 +166,13 @@ function hideCommandInstructions() {
 
 function getMoonAtCell(state, col, row) {
   const anomalies = state?.map?.anomalies || [];
-  const anom = anomalies.find(a => a.x === col && a.y === row);
-  if (!anom) return null;
-  if (anom.type === 'large_moon' || anom.type === 'small_moon' ||
-      anom.type === 'major_moon' || anom.type === 'normal_moon') {
-    return anom;
-  }
-  return null;
+  const atCell = anomalies.filter(a => a.x === col && a.y === row);
+  return atCell.find(a =>
+    typeof window.isMoonAnomalyType === 'function'
+      ? window.isMoonAnomalyType(a.type)
+      : (a.type === 'large_moon' || a.type === 'small_moon' ||
+         a.type === 'major_moon' || a.type === 'normal_moon')
+  ) || null;
 }
 
 // Called from the map cell click handler (we will wire this in index.html patch)
@@ -170,11 +196,18 @@ function handleMapCellCommandClick(col, row) {
   const type = commandMode.type;
 
   if (type === 'miner') {
+    if (!requireBuilderRole('deploy or command mining rigs')) {
+      cancelCommandMode();
+      return true;
+    }
+
     const minerId = commandMode.minerId;
 
     if (minerId) {
-      // Explicit move of a selected rig
-      socket.emit('moveMiner', { minerId, targetX: col, targetY: row }, (res) => {
+      const state = (typeof lastState !== 'undefined') ? lastState : null;
+      const moon = getMoonAtCell(state, col, row);
+      const targetObject = moon ? (moon.id || moon.name) : null;
+      socket.emit('moveMiner', { minerId, targetX: col, targetY: row, targetObject }, (res) => {
         if (res && !res.ok && res.error) alert('Move order failed: ' + res.error);
         cancelCommandMode();
         if (typeof lastState !== 'undefined' && lastState && typeof render === 'function') {
@@ -186,12 +219,20 @@ function handleMapCellCommandClick(col, row) {
       // but for now we prefer deploy if they have available rigs.
       // Client can check state, but simplest is just send deployMiner.
       // (The server already has good logic.)
-      socket.emit('deployMiner', { targetX: col, targetY: row }, (res) => {
+      const state = (typeof lastState !== 'undefined') ? lastState : null;
+      const moon = getMoonAtCell(state, col, row);
+      const targetObject = moon ? (moon.id || moon.name) : null;
+      socket.emit('deployMiner', { targetX: col, targetY: row, targetObject }, (res) => {
         if (res && !res.ok && res.error) alert('Order failed: ' + res.error);
         cancelCommandMode();
       });
     }
   } else if (type === 'factory') {
+    if (!requireBuilderRole('deploy factory kits')) {
+      cancelCommandMode();
+      return true;
+    }
+
     const state = (typeof lastState !== 'undefined') ? lastState : null;
     const moon = getMoonAtCell(state, col, row);
     if (!moon) {
@@ -213,9 +254,45 @@ function handleMapCellCommandClick(col, row) {
         cancelCommandMode();
       });
     }
-  } else if (type === 'probe') {
+  } else if (type === 'probe' || type === 'probe-survey' || type === 'probe-tactical') {
     socket.emit('launchProbe', { x: col, y: row }, (res) => {
       if (res && !res.ok && res.error) alert('Probe launch failed: ' + res.error);
+      cancelCommandMode();
+    });
+  } else if (type === 'droneWing') {
+    const wingId = commandMode.wingId;
+    if (wingId) {
+      socket.emit('moveDroneWing', { wingId, targetX: col, targetY: row }, (res) => {
+        if (res && !res.ok && res.error) alert('Drone wing order failed: ' + res.error);
+        cancelCommandMode();
+      });
+    } else {
+      socket.emit('deployDroneWing', { x: col, y: row }, (res) => {
+        if (res && !res.ok && res.error) alert('Drone wing deploy failed: ' + res.error);
+        cancelCommandMode();
+      });
+    }
+  } else if (type === 'fleet') {
+    const state = (typeof lastState !== 'undefined') ? lastState : null;
+    const myTeam = state?.myTeam;
+    let fleetId = commandMode.fleetId;
+
+    if (!fleetId && myTeam) {
+      const fleets = (state.deployedFleets || []).filter(f => f.teamName === myTeam);
+      const stationed = fleets.filter(f => f.state === 'stationed');
+      const moving = fleets.filter(f => f.state === 'moving');
+      const pick = stationed[0] || moving[0];
+      if (pick) fleetId = pick.id;
+    }
+
+    if (!fleetId) {
+      alert('No fleet selected. Use the Active Fleets panel to order a specific fleet.');
+      cancelCommandMode();
+      return true;
+    }
+
+    socket.emit('moveFleet', { fleetId, targetX: col, targetY: row }, (res) => {
+      if (res && !res.ok && res.error) alert('Fleet order failed: ' + res.error);
       cancelCommandMode();
     });
   }
@@ -288,29 +365,45 @@ function getCommandMode() {
 
 window.getCommandMode = getCommandMode;
 
-// New: War Commander entry point for launching probes (as requested)
-function startProbeCommandFromWar() {
+function getTeamProbeStock() {
   const last = (typeof lastState !== 'undefined') ? lastState : null;
-  const myTeamName = last ? last.myTeam : null;
-
+  const myTeamName = last?.myTeam;
   const myTeamData = myTeamName && last
     ? (last.teams || []).find(t => t.name === myTeamName)
     : null;
+  return myTeamData?.probes || 0;
+}
 
-  const probes = myTeamData?.probes || 0;
-
-  if (probes < 1) {
-    alert('You have no probes available. Build more as Builder.');
+function startTacticalProbeFromWar() {
+  if (getTeamProbeStock() < 1) {
+    alert('No team probes available. Ask Builder to queue more.');
     return;
   }
-
-  enterMapCommandMode('probe', {
+  enterMapCommandMode('probe-tactical', {
     action: 'launch',
-    instructions: 'Click destination. Probe travels slowly (~8s/cell), scans 30s on arrival, then reveals sites + yields for your team only.'
+    instructions: 'Tactical probe: small ping zone ~45s after arrival. Enemy ships in zone visible while active.'
   });
 }
 
+function startSurveyProbeFromBuilder() {
+  if (!requireBuilderRole('launch survey probes')) return;
+  if (getTeamProbeStock() < 1) {
+    alert('No team probes available. Queue + PROBE in production first.');
+    return;
+  }
+  enterMapCommandMode('probe-survey', {
+    action: 'launch',
+    instructions: 'Survey probe: large area resource scan (30s) after arrival. Reveals hidden sites + yields.'
+  });
+}
+
+/** @deprecated use startTacticalProbeFromWar */
+function startProbeCommandFromWar() {
+  startTacticalProbeFromWar();
+}
+
 function deployAvailableFactory() {
+  if (!requireBuilderRole('deploy factory kits')) return;
   const last = (typeof lastState !== 'undefined') ? lastState : null;
   const myTeamName = last ? last.myTeam : null;
   const myTeamData = myTeamName && last
@@ -332,3 +425,37 @@ function deployAvailableFactory() {
 window.deployAvailableFactory = deployAvailableFactory;
 window.getMoonAtCell = getMoonAtCell;
 window.startProbeCommandFromWar = startProbeCommandFromWar;
+window.startTacticalProbeFromWar = startTacticalProbeFromWar;
+window.startSurveyProbeFromBuilder = startSurveyProbeFromBuilder;
+
+function startDroneWingDeploy() {
+  const last = (typeof lastState !== 'undefined') ? lastState : null;
+  const myTeamData = last?.teams?.find(t => t.name === last?.myTeam);
+  const stock = myTeamData?.droneWings || 0;
+  const deployed = (last?.deployedDroneWings || []).filter(w => w.teamName === last?.myTeam).length;
+
+  if (stock < 1) {
+    alert('No drone wings in stock. Ask Builder to queue DRONE WING.');
+    return;
+  }
+  if (deployed >= 2) {
+    alert('Max 2 drone wings on map. Wait for one to be destroyed or redirect existing wings.');
+    return;
+  }
+
+  enterMapCommandMode('droneWing', {
+    action: 'deploy',
+    instructions: 'Deploy drone wing — harassment unit (~6s/cell). Weak vs fleets; good vs undefended miners.'
+  });
+}
+
+function orderDroneWingFromWar(wingId) {
+  enterMapCommandMode('droneWing', {
+    wingId,
+    action: 'move',
+    instructions: 'Redirect drone wing to a new cell.'
+  });
+}
+
+window.startDroneWingDeploy = startDroneWingDeploy;
+window.orderDroneWingFromWar = orderDroneWingFromWar;

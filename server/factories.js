@@ -8,14 +8,42 @@ const MAX_QUEUE_PER_FACTORY = 4;
 
 const MOON_TYPES = new Set(['large_moon', 'small_moon', 'major_moon', 'normal_moon']);
 
+const ANOMALY_TERRAIN_PRIORITY = {
+  large_moon: 100,
+  major_moon: 90,
+  small_moon: 80,
+  normal_moon: 70,
+  gas_cloud: 40,
+  asteroid_cluster: 10
+};
+
 function isMoonType(type) {
   return MOON_TYPES.has(type);
 }
 
+function getPrimaryAnomalyAt(gameOrList, x, y) {
+  const list = Array.isArray(gameOrList)
+    ? gameOrList
+    : (gameOrList?.map?.anomalies || []);
+  const atCell = list.filter(a => a.x === x && a.y === y);
+  if (atCell.length === 0) return null;
+  if (atCell.length === 1) return atCell[0];
+  let best = atCell[0];
+  let bestScore = ANOMALY_TERRAIN_PRIORITY[best.type] || 0;
+  for (let i = 1; i < atCell.length; i++) {
+    const score = ANOMALY_TERRAIN_PRIORITY[atCell[i].type] || 0;
+    if (score > bestScore) {
+      best = atCell[i];
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
 function getMoonAt(game, x, y) {
   if (!game.map?.anomalies) return null;
-  const anom = game.map.anomalies.find(a => a.x === x && a.y === y);
-  return anom && isMoonType(anom.type) ? anom : null;
+  const atCell = game.map.anomalies.filter(a => a.x === x && a.y === y);
+  return atCell.find(a => isMoonType(a.type)) || null;
 }
 
 function resolveMoonRef(game, x, y, targetObject = null) {
@@ -33,20 +61,116 @@ function moonKey(moon) {
   return moon.id || moon.name || `${moon.x},${moon.y}`;
 }
 
-function factoryOccupiesMoon(factory, moon) {
+function factoryOccupiesMoonAt(factory, moon, atX, atY) {
   if (!factory || !moon || factory.isHome) return false;
-  const key = moonKey(moon);
-  if (factory.targetObject && key && (factory.targetObject === moon.id || factory.targetObject === moon.name)) {
+  const moonId = moon.id || moon.name;
+  if (moonId && factory.targetObject &&
+      (factory.targetObject === moon.id || factory.targetObject === moon.name)) {
+    if (factory.state === 'moving') {
+      return factory.targetX === atX && factory.targetY === atY;
+    }
+    return factory.x === atX && factory.y === atY;
+  }
+  if ((factory.state === 'operational' || factory.state === 'setting_up') &&
+      factory.x === atX && factory.y === atY) {
     return true;
   }
-  if (factory.state === 'operational') {
-    const here = getMoonAt(factory, factory.x, factory.y);
-    return here && moonKey(here) === key;
-  }
-  if (factory.state === 'moving' || factory.state === 'setting_up') {
-    if (factory.targetX === moon.x && factory.targetY === moon.y) return true;
-  }
   return false;
+}
+
+function factoryOccupiesMoon(factory, moon) {
+  if (!factory || !moon || factory.isHome) return false;
+  return factoryOccupiesMoonAt(factory, moon, moon.x, moon.y);
+}
+
+function minerOccupiesMoonAt(miner, moon, atX, atY) {
+  if (!miner || !moon) return false;
+  if (miner.state !== 'mining' && miner.state !== 'setting_up') return false;
+  const moonId = moon.id || moon.name;
+  if (moonId && miner.targetObject &&
+      (miner.targetObject === moon.id || miner.targetObject === moon.name)) {
+    return true;
+  }
+  return miner.x === atX && miner.y === atY;
+}
+
+/** Keep moon-tethered rigs/factories aligned every tick (covers orbit steps + legacy saves). */
+function reconcileMoonAttachedMiners(game) {
+  for (const miner of game.deployedMiners || []) {
+    if (miner.state !== 'mining' && miner.state !== 'setting_up') continue;
+
+    if (miner.targetObject) {
+      const moon = (game.map.anomalies || []).find(a =>
+        (a.id === miner.targetObject || a.name === miner.targetObject) &&
+        isMoonType(a.type)
+      );
+      if (moon && (miner.x !== moon.x || miner.y !== moon.y)) {
+        miner.x = moon.x;
+        miner.y = moon.y;
+        if (miner.miningSite) {
+          miner.miningSite.x = moon.x;
+          miner.miningSite.y = moon.y;
+        }
+      }
+      continue;
+    }
+
+    const here = getPrimaryAnomalyAt(game, miner.x, miner.y);
+    if (here && isMoonType(here.type) && (here.id || here.name)) {
+      miner.targetObject = here.id || here.name;
+      continue;
+    }
+
+    // Legacy rigs stranded after moon moved (no targetObject saved)
+    if (miner.miningSite?.type && isMoonType(miner.miningSite.type)) {
+      const candidates = (game.map.anomalies || []).filter(a =>
+        isMoonType(a.type) && a.orbitRadius && a.type === miner.miningSite.type
+      );
+      if (candidates.length === 1) {
+        const moon = candidates[0];
+        miner.targetObject = moon.id || moon.name;
+        miner.x = moon.x;
+        miner.y = moon.y;
+        if (miner.miningSite) {
+          miner.miningSite.x = moon.x;
+          miner.miningSite.y = moon.y;
+          miner.miningSite.objectId = miner.targetObject;
+        }
+      }
+    }
+  }
+}
+
+/** When a moon orbits, drag rigs and forward factories that were on its old cell. */
+function syncMoonAttachedUnits(game, moon, oldX, oldY) {
+  if (!moon || (oldX === moon.x && oldY === moon.y)) return;
+
+  const moonRef = moon.id || moon.name;
+
+  for (const miner of game.deployedMiners || []) {
+    if (!minerOccupiesMoonAt(miner, moon, oldX, oldY)) continue;
+    miner.x = moon.x;
+    miner.y = moon.y;
+    if (moonRef) miner.targetObject = moonRef;
+    if (miner.miningSite) {
+      miner.miningSite.x = moon.x;
+      miner.miningSite.y = moon.y;
+      miner.miningSite.type = moon.type;
+      miner.miningSite.objectId = moonRef;
+    }
+    if (miner.targetX != null) miner.targetX = moon.x;
+    if (miner.targetY != null) miner.targetY = moon.y;
+  }
+
+  for (const factory of game.factories || []) {
+    if (!factoryOccupiesMoonAt(factory, moon, oldX, oldY)) continue;
+    factory.x = moon.x;
+    factory.y = moon.y;
+    if (moonRef) factory.targetObject = moonRef;
+    factory.targetX = moon.x;
+    factory.targetY = moon.y;
+    if (factory.moonName != null) factory.moonName = moon.name || moonRef;
+  }
 }
 
 function countFactoriesAtMoon(game, teamName, moon, excludeFactoryId = null) {
@@ -278,6 +402,9 @@ function processFactorySetup(game, debugLog) {
 
     factory.state = 'operational';
     factory.setupCompleteTime = null;
+    if (!factory.isHome) {
+      factory.siegeHP = require('./drone-wings').FORWARD_FACTORY_SIEGE_HP;
+    }
 
     const team = game.getTeamByName(factory.teamName);
     if (team) syncBuildQueuesForTeam(team, game);
@@ -325,7 +452,13 @@ module.exports = {
   MAX_FACTORIES_PER_MOON,
   MAX_QUEUE_PER_FACTORY,
   isMoonType,
+  getPrimaryAnomalyAt,
   getMoonAt,
+  resolveMoonRef,
+  minerOccupiesMoonAt,
+  factoryOccupiesMoonAt,
+  reconcileMoonAttachedMiners,
+  syncMoonAttachedUnits,
   createDeployedFactory,
   moveFactory,
   processFactoryMovement,

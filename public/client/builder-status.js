@@ -8,7 +8,28 @@ function cellLabel(col, row) {
 
 function getAnomalyAt(state, x, y) {
   const anomalies = state.map?.anomalies || [];
+  if (typeof window.getPrimaryAnomalyAt === 'function') {
+    return window.getPrimaryAnomalyAt(anomalies, x, y);
+  }
   return anomalies.find(a => a.x === x && a.y === y) || null;
+}
+
+/** Resolve site for a rig — follow orbiting moons via targetObject, not stale grid coords. */
+function resolveAnomalyForMiner(state, miner) {
+  const anomalies = state.map?.anomalies || [];
+  if (miner.targetObject) {
+    const byRef = anomalies.find(a => a.id === miner.targetObject || a.name === miner.targetObject);
+    if (byRef) return byRef;
+  }
+  if (miner.miningSite?.objectId) {
+    const bySite = anomalies.find(a =>
+      a.id === miner.miningSite.objectId || a.name === miner.miningSite.objectId
+    );
+    if (bySite) return bySite;
+  }
+  const x = miner.state === 'moving' ? (miner.targetX ?? miner.x) : miner.x;
+  const y = miner.state === 'moving' ? (miner.targetY ?? miner.y) : miner.y;
+  return getAnomalyAt(state, x, y);
 }
 
 function formatAnomalyTarget(anomaly) {
@@ -27,10 +48,11 @@ function miningSiteTitle(anomaly, cell) {
   return cell;
 }
 
-function resolveMineLine(anomaly, teamName, rigsAtSite, noAnomLabel = 'off anomaly') {
+function resolveMineLine(anomaly, teamName, rigsAtSite, noAnomLabel = 'off anomaly', state = null) {
   if (!anomaly) return `${noAnomLabel} (no yield)`;
-  if (typeof window.isAnomalyDiscoveredByTeam === 'function' && !window.isAnomalyDiscoveredByTeam(anomaly, teamName)) {
-    return 'unknown — probe site to reveal';
+  if (typeof window.isAnomalyDiscoveredByTeam === 'function' &&
+      !window.isAnomalyDiscoveredByTeam(anomaly, teamName, state)) {
+    return 'unknown — probe or deploy miner to reveal';
   }
   return window.formatMiningRatesForAnomaly(anomaly, rigsAtSite);
 }
@@ -86,20 +108,20 @@ function renderMiningSection(state, myTeamName) {
     let siteX, siteY, siteCell, anom, statusLine, mineLine;
 
     if (m.state === 'mining') {
-      siteX = m.x;
-      siteY = m.y;
+      anom = resolveAnomalyForMiner(state, m);
+      siteX = anom ? anom.x : m.x;
+      siteY = anom ? anom.y : m.y;
       siteCell = cellLabel(siteX, siteY);
-      anom = getAnomalyAt(state, siteX, siteY);
       const rigsHere = window.countActiveMinersAtSite(miners, siteX, siteY, myTeamName);
-      mineLine = resolveMineLine(anom, myTeamName, rigsHere || 1);
+      mineLine = resolveMineLine(anom, myTeamName, rigsHere || 1, 'off anomaly', state);
       statusLine = `<span style="color:#66ffaa;">▶ mining</span>`;
     } else if (m.state === 'setting_up') {
-      siteX = m.x;
-      siteY = m.y;
+      anom = resolveAnomalyForMiner(state, m);
+      siteX = anom ? anom.x : m.x;
+      siteY = anom ? anom.y : m.y;
       siteCell = cellLabel(siteX, siteY);
-      anom = getAnomalyAt(state, siteX, siteY);
       const rigsHere = window.countActiveMinersAtSite(miners, siteX, siteY, myTeamName) + 1;
-      mineLine = resolveMineLine(anom, myTeamName, rigsHere);
+      mineLine = resolveMineLine(anom, myTeamName, rigsHere, 'off anomaly', state);
       const eta = m.setupRemaining != null ? `${m.setupRemaining}s` : '…';
       statusLine = `<span style="color:#ffcc66;">▶ setting up (${eta})</span>`;
     } else {
@@ -108,7 +130,7 @@ function renderMiningSection(state, myTeamName) {
       siteCell = cellLabel(siteX, siteY);
       anom = getAnomalyAt(state, siteX, siteY);
       const rigsHere = window.countActiveMinersAtSite(miners, siteX, siteY, myTeamName) + 1;
-      mineLine = resolveMineLine(anom, myTeamName, rigsHere, 'unknown site');
+      mineLine = resolveMineLine(anom, myTeamName, rigsHere, 'unknown site', state);
       statusLine = `<span style="color:#88ccff;">▶ en route to ${siteCell}</span>`;
     }
 

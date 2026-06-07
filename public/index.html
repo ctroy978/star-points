@@ -490,62 +490,67 @@
               <span><span id="war-destroyers" class="big-number" style="font-size:20px;">0</span> / <span id="war-destroyers-total" style="font-size:13px;color:#006633;">0</span></span>
             </div>
 
-            <!-- CAPITOL HULLS (new — required to unlock assembly) -->
+            <!-- CAPITOL HULLS (Builder production — required to unlock assembly) -->
             <div class="stat-row" style="margin:4px 0 2px;">
-              <span><strong>CAPITOL HULLS</strong> <span style="font-size:9px;color:#664433;">(prototype)</span></span>
+              <span><strong>CAPITOL HULLS</strong> <span style="font-size:9px;color:#006633;">(available)</span></span>
               <span id="war-capitols" class="big-number" style="font-size:20px;">0</span>
             </div>
-            <div style="font-size:8px; color:#664433; margin-bottom:4px; line-height:1.1;">
-              Future: Military Academy project or special Builder production. Assembly locked until ≥1 available.
+            <div style="font-size:8px; color:#006633; margin-bottom:4px; line-height:1.1;">
+              Produced by Builder. Assembly locked until ≥1 hull not assigned to a deployed fleet.
             </div>
 
-            <!-- ADMIRALS (new — future "Schools for Admirals") -->
+            <!-- ADMIRALS (Military Academy production) -->
             <div class="stat-row" style="margin:2px 0;">
-              <span><strong>ADMIRALS</strong> <span style="font-size:9px;color:#664433;">(prototype)</span></span>
+              <span><strong>ADMIRALS</strong> <span style="font-size:9px;color:#006633;">(unassigned)</span></span>
               <span id="war-admirals" class="big-number" style="font-size:20px;">0</span>
             </div>
-            <div style="font-size:8px; color:#664433; margin-bottom:4px; line-height:1.1;">
-              Future: Admiral Schools (Builder production). Every fleet requires one. Name of fleet = Admiral's name.
+            <div style="font-size:8px; color:#006633; margin-bottom:4px; line-height:1.1;">
+              Produced at home Military Academy. Fleet identity = Admiral's name.
             </div>
 
-            <!-- PROBES — War Commander discovery / scouting asset (per playtest) -->
+            <!-- PROBES — shared team stock; War launches tactical pings -->
             <div style="margin:6px 0 4px; padding:4px 6px; background:#001122; border:1px solid #003366; font-size:11px;">
               <div style="display:flex; justify-content:space-between; align-items:center;">
-                <span><strong>PROBES</strong> <span style="font-size:9px;color:#006633;">(War Commander)</span></span>
+                <span><strong>TEAM PROBES</strong> <span style="font-size:9px;color:#006633;">(shared stock)</span></span>
                 <span id="war-probes" class="big-number" style="font-size:20px; color:#66ccff;">0</span>
               </div>
+              <div id="team-probe-activity-war" style="margin:4px 0;"></div>
               <div style="margin-top:3px;">
-                <button class="btn" onclick="startProbeCommandFromWar()" 
-                        style="border-color:#66ccff; color:#66ccff; font-size:13px; padding:5px 12px; width:100%;">
-                  LAUNCH PROBE (slow travel + 30s scan)
+                <button id="btn-tactical-probe" class="btn" onclick="startTacticalProbeFromWar()" 
+                        style="border-color:#ffaa66; color:#ffaa66; font-size:13px; padding:5px 12px; width:100%;">
+                  LAUNCH TACTICAL PROBE
                 </button>
               </div>
               <div style="font-size:8px; color:#006633; margin-top:2px;">
-                Click button → Map → target cell. Probe travels ~8s/cell, then scans 30s before intel returns. Build more via Builder.
+                Small ping zone ~45s after arrival. Enemy ships in zone visible while active. Builder queues replacements.
+              </div>
+            </div>
+
+            <!-- DRONE WINGS — early harassment (Builder queues, War deploys) -->
+            <div style="margin:6px 0 4px; padding:4px 6px; background:#1a1100; border:1px solid #553311; font-size:11px;">
+              <div style="display:flex; justify-content:space-between; align-items:center;">
+                <span><strong>DRONE WINGS</strong> <span style="font-size:9px;color:#006633;">(in stock)</span></span>
+                <span id="war-drone-wings-stock" class="big-number" style="font-size:20px; color:#ffaa66;">0</span>
+              </div>
+              <div id="war-drone-wings" style="margin:4px 0; min-height:12px;"></div>
+              <button id="btn-deploy-drone-wing" class="btn btn-small" onclick="startDroneWingDeploy()"
+                      style="width:100%; margin-top:3px; border-color:#ffaa66; color:#ffaa66;">
+                DEPLOY DRONE WING TO MAP
+              </button>
+              <div style="font-size:8px; color:#006633; margin-top:2px;">
+                Starter wing included. Max 2 on map. Harass miners; weak vs fleets. Cost: 1 Neuro to rebuild.
               </div>
             </div>
 
             <div id="war-assets-disabled" class="disabled-note hidden">View only — you are not the War Commander</div>
-
-            <!-- Demo helpers for prototype testing (clearly labeled) -->
-            <div style="margin-top:4px; padding-top:3px; border-top:1px dotted #003322; font-size:8px; color:#664433;">
-              PROTOTYPE DEMO:
-              <button class="btn btn-small" onclick="demoAddCapitolHull()" style="padding:0 3px; font-size:8px;">+1 Hull</button>
-              <button class="btn btn-small" onclick="demoAddAdmirals()" style="padding:0 3px; font-size:8px;">+ Demo Admirals</button>
-            </div>
           </div>
 
-          <!-- FLEET ASSEMBLY — CAPITOL SHIPS (PROTOTYPE) — now gated on having a Capitol hull -->
+          <!-- FLEET ASSEMBLY — CAPITOL SHIPS -->
           <div class="panel" id="fleet-assembly-panel" style="margin:0 0 6px 0; padding:6px 8px; background:#0a0a0a;">
-            <div class="panel-title" style="color:#ffaa00; margin-bottom:3px;">FLEET ASSEMBLY — CAPITOL SHIPS <span style="font-size:9px; color:#664433;">(UI PROTOTYPE)</span></div>
+            <div class="panel-title" style="color:#ffaa00; margin-bottom:3px;">FLEET ASSEMBLY — CAPITOL SHIPS</div>
 
             <div id="assembly-locked-banner" style="display:none; font-size:9px; color:#ff3366; background:#220000; padding:3px 5px; margin-bottom:5px; border-left:2px solid #660000;">
-              ASSEMBLY LOCKED — Requires at least 1 available Capitol Hull in the Unassigned register above.
-            </div>
-
-            <div style="font-size:9px; color:#664433; background:#111; padding:2px 4px; margin-bottom:5px; border-left:2px solid #442200;">
-              DESIGN PROTOTYPE — Capitol hulls and Admirals are not yet produced by Builder.<br>
-              Commissioning is 100% local to this browser. No server effect. Legacy LAUNCH still works.
+              ASSEMBLY LOCKED — Requires at least 1 available Capitol Hull and 1 unassigned Admiral.
             </div>
 
             <!-- Admiral selector (replaces old random name — fleet identity = Admiral name) -->
@@ -581,7 +586,7 @@
             </div>
 
             <button class="btn" onclick="commissionFleet()" id="btn-commission" style="font-size:12px; padding:3px 10px;">
-              COMMISSION FLEET (local prototype)
+              COMMISSION FLEET
             </button>
             <div id="commission-disabled" class="disabled-note hidden">View only — you are not the War Commander</div>
           </div>
@@ -593,32 +598,31 @@
             <div class="panel-title" style="color:#ffcc33; margin-bottom:3px;">ACTIVE WAR FLEETS — TASK FORCES</div>
             <div id="war-fleets" style="min-height:38px; font-size:11px; background:#050505; padding:4px 5px; border:1px solid #002211;">
               <!-- Populated dynamically by renderWarFleets() -->
-              <span style="color:#006633;">No commissioned fleets (prototype only — use Assembly panel above).</span>
+              <span style="color:#006633;">No commissioned fleets — use Assembly panel above.</span>
+            </div>
+            <div style="margin-top:4px;">
+              <button class="btn" onclick="startFleetCommandFromWar()" id="btn-order-fleet-map"
+                      style="border-color:#ffaa44; color:#ffaa44; font-size:12px; padding:4px 10px; width:100%;">
+                ORDER FLEET ON MAP
+              </button>
             </div>
             <div style="font-size:8px; color:#003322; margin-top:2px;">
-              Fleets represented by their Capitol Ship. Escorts committed until disbanded (local simulation).
+              Stationed fleets hidden on map; moving fleets show as initial→ badge. Escorts committed until fleet destroyed.
             </div>
           </div>
 
-          <!-- Existing simple attack panel (kept fully functional per requirements — parallel path) -->
-          <div class="panel" style="margin:0 0 6px 0; padding:6px 8px;">
-            <div class="panel-title" style="font-size:10px;">LEGACY DIRECT ATTACK WAVES (still fully operational)</div>
-            <div style="margin:4px 0 2px;">
-              <select id="attack-target" style="width:120px;"></select>
-              <input id="attack-num" type="number" value="5" min="1" style="width:46px; text-align:center; margin:0 2px;">
-              <button class="btn btn-small" onclick="adjustAttack(-1)">−</button>
-              <button class="btn btn-small" onclick="adjustAttack(1)">+</button>
-              <button class="btn" onclick="launchAttack()" id="btn-attack">LAUNCH</button>
+          <!-- PEACE FLAGS — one-sided auto-attack disable per enemy team -->
+          <div class="panel" style="margin:0 0 6px 0; padding:5px 7px; border-color:#003344;">
+            <div class="panel-title" style="color:#66ccaa; margin-bottom:3px;">PEACE FLAGS — PER ENEMY TEAM</div>
+            <div id="peace-panel" style="font-size:11px; min-height:24px;">
+              <span style="color:#006633;">Peace toggles appear when enemy teams exist.</span>
             </div>
-            <div style="font-size:9px; color:#006633;">8s travel • Survivors return (no interception in this build)</div>
-            <div id="attack-disabled" class="disabled-note hidden">View only — you are not the War Commander</div>
+            <div style="font-size:8px; color:#006633; margin-top:2px;">
+              When PEACE is on, your fleets will not auto-attack that team's assets (one-sided).
+            </div>
+            <div id="peace-disabled" class="disabled-note hidden">View only — you are not the War Commander</div>
           </div>
 
-          <!-- Existing FLEETS IN TRANSIT (real server waves — unchanged) -->
-          <div class="panel" style="margin:0; padding:6px 8px;">
-            <div class="panel-title">FLEETS IN TRANSIT (real server waves)</div>
-            <div id="fleets" class="fleet-list">No fleets in space.</div>
-          </div>
         </div>
       </div>
 
@@ -636,6 +640,12 @@
             </div>
             <div style="font-size:10px; color:#006633;">Instant transfer to any living team</div>
             <div id="trade-disabled" class="disabled-note hidden">View only — you are not the Negotiator</div>
+          </div>
+
+          <div class="panel" style="margin:0 0 6px 0; padding:6px 8px; background:#001122; border:1px solid #003366;">
+            <div class="panel-title" style="margin-bottom:4px;">TEAM PROBES</div>
+            <div id="team-probe-activity-negotiator" style="font-size:9px;"></div>
+            <div style="font-size:9px; color:#335544; margin-top:4px;">View only — Negotiator scout probes coming later.</div>
           </div>
 
           <div class="panel" style="margin:0; padding:6px 8px;">
@@ -673,9 +683,21 @@
               <span id="builder-available-miners" class="big-number" style="font-size:22px; color:#66ffaa;">0</span>
             </div>
             <div style="font-size:9px; color:#006633; margin-top:2px;">Build more in queue above. Use the "VIEW MAP" button below for deployment.</div>
-            <button class="btn btn-small" onclick="deployAvailableMiner()" style="margin-top:6px; width:100%; font-size:11px;">
+            <button id="btn-deploy-miner" class="btn btn-small" onclick="deployAvailableMiner()" style="margin-top:6px; width:100%; font-size:11px;">
               DEPLOY MINER TO MAP
             </button>
+          </div>
+
+          <div class="panel" style="margin:0 0 6px 0; padding:6px 8px; background:#001122; border-color:#003366;">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+              <span style="font-size:12px;"><strong>TEAM PROBES</strong> <span style="font-size:9px;color:#006633;">(shared — you launch surveys)</span></span>
+              <span id="builder-probes" class="big-number" style="font-size:22px; color:#66ccff;">0</span>
+            </div>
+            <div id="team-probe-activity-builder" style="margin:4px 0; font-size:9px;"></div>
+            <button id="btn-survey-probe" class="btn btn-small" onclick="startSurveyProbeFromBuilder()" style="margin-top:6px; width:100%; font-size:11px; border-color:#66ccff; color:#66ccff;">
+              LAUNCH SURVEY PROBE TO MAP
+            </button>
+            <div style="font-size:9px; color:#006633; margin-top:2px;">Queue + PROBE below to refill stock. Survey reveals hidden sites + resource yields (large area).</div>
           </div>
 
           <div class="panel" style="margin:0 0 6px 0; padding:6px 8px; background:#001a33; border-color:#003366;">
@@ -684,7 +706,7 @@
               <span id="builder-available-factories" class="big-number" style="font-size:22px; color:#66ccff;">0</span>
             </div>
             <div style="font-size:9px; color:#006633; margin-top:2px;">Queue factory kits above, then deploy to a moon for an extra build queue + synthesis.</div>
-            <button class="btn btn-small" onclick="deployAvailableFactory()" style="margin-top:6px; width:100%; font-size:11px;">
+            <button id="btn-deploy-factory" class="btn btn-small" onclick="deployAvailableFactory()" style="margin-top:6px; width:100%; font-size:11px;">
               DEPLOY FACTORY TO MOON
             </button>
           </div>
@@ -700,6 +722,9 @@
             <!-- Military Production -->
             <div style="margin-bottom:8px;">
               <div style="font-size:10px; color:#ffaa66; margin-bottom:2px;"><strong>MILITARY PRODUCTION</strong></div>
+              <button class="btn btn-small" onclick="queueBuild('drone_wing')" title="Costs: 3 Fused Xenon, 2 Helium-3 Lattice, 1 Quantite, 3 Plasma-Bound Carbon, 0 Antimatter Catalyst, 1 Neurocryst" style="margin-bottom:3px;">
+                + DRONE WING (War harassment — 1 Neuro)
+              </button><br>
               <button class="btn btn-small" onclick="queueBuild('frigate')" title="Costs: 4 Fused Xenon, 2 Helium-3 Lattice, 0 Quantite, 3 Plasma-Bound Carbon, 0 Antimatter Catalyst, 0 Neurocryst" style="margin-bottom:3px;">
                 + FRIGATE (fast attack craft)
               </button><br>
@@ -719,7 +744,7 @@
               
               <!-- Probe production -->
               <button class="btn btn-small" onclick="queueBuild('probe')" title="Costs: 1 Fused Xenon, 1 Helium-3 Lattice, 1 Quantite, 0 Plasma-Bound Carbon, 0 Antimatter Catalyst, 0 Neurocryst" style="margin-bottom:3px;">
-                + PROBE (fast reconnaissance — reveals sites + mineable resources)
+                + PROBE (shared team stock — Builder surveys / War tactical pings)
               </button><br>
               
               <!-- Factory Kit -->
@@ -767,7 +792,7 @@
             If the map is blank, check the browser console (F12) for errors.
           </div>
           <div style="font-size:10px; color:#006633; margin-top:6px; text-align:center;">
-            ★ = Team base (gold border). Moons: ◉ Large • ○ Small. ☁ Gas • ◆ Asteroid. M→/M⏳ F→/F⏳ = units in transit or setting up. Hover any cell for deployed units. ✧ probe en route · ◎ scanning.
+            ★ = Team base (gold border). Moons: ◉ Large • ○ Small. ☁ Gas • ◆ Asteroid. M→/M⏳ F→/F⏳ = miners/factories in transit. X→ = fleet en route. ✧ probe · ◎ survey · ◉ tactical ping (orange zone).
           </div>
 
           <!-- Popup for cell details (delayed rich hover) -->
@@ -825,33 +850,6 @@ let myRole = null;           // 'war' | 'negotiator' | 'builder'
 let isHost = false;
 let lastState = null;
 let selectedMapSize = 13;    // Default for host map selection
-
-// === WAR FLEET PROTOTYPE STATE (client-side only design simulation) ===
-// Holds locally commissioned fleets for the current browser session.
-// This demonstrates the "move to another UI location" behavior without any server involvement.
-let myPrototypeWarFleets = [];   // client-only
-let myPrototypeAdmirals = [];    // demo: [{id, name}]
-let myPrototypeCapitolHulls = 0; // demo count (normally 0)
-
-// === DEMO HELPERS (clearly labeled PROTOTYPE ONLY — for testing the new gating & admiral flow) ===
-function demoAddCapitolHull() {
-  myPrototypeCapitolHulls = Math.max(0, myPrototypeCapitolHulls + 1);
-  if (lastState) render(lastState);
-  console.log('[PROTOTYPE DEMO] Added 1 capitol hull. Total now:', myPrototypeCapitolHulls);
-}
-
-function demoAddAdmirals() {
-  const demoNames = ['Elena Voss', 'Marcus Hale', 'Soren Kade', 'Lira Solene'];
-  let added = 0;
-  demoNames.forEach(n => {
-    if (!myPrototypeAdmirals.find(a => a.name === n)) {
-      myPrototypeAdmirals.push({ id: 'adm-' + Date.now() + '-' + added, name: n });
-      added++;
-    }
-  });
-  if (lastState) render(lastState);
-  console.log('[PROTOTYPE DEMO] Added demo admirals. Now available:', myPrototypeAdmirals.length);
-}
 
 // Configure UI based on whether this is the teacher host page or student page
 function configurePageForRole() {
@@ -994,6 +992,10 @@ function startGame() {
 
 function queueBuild(type) {
   console.log('[BUILDER] queueBuild called with type:', type, 'lastState?', !!lastState, 'myRole?', lastState?.myRole);
+  if (!lastState || lastState.myRole !== 'builder') {
+    alert('Only the Builder can queue production.');
+    return;
+  }
 
   // Warning when Builder tries to build non-miner items with no active mining rigs.
   // Made non-blocking so it cannot prevent legitimate builds.
@@ -1034,6 +1036,10 @@ function queueBuild(type) {
 }
 
 function deployAvailableMiner() {
+  if (!lastState || lastState.myRole !== 'builder') {
+    alert('Only the Builder can deploy mining rigs.');
+    return;
+  }
   // Use the command system to let the Builder choose a location on the map
   if (typeof enterMapCommandMode === 'function') {
     enterMapCommandMode('miner', {
@@ -1043,22 +1049,6 @@ function deployAvailableMiner() {
   } else {
     alert('Map command mode not available. Use the Map tab to deploy miners.');
   }
-}
-
-function adjustAttack(delta) {
-  const input = el('attack-num');
-  let val = parseInt(input.value) || 1;
-  val = Math.max(1, Math.min(99, val + delta));
-  input.value = val;
-}
-
-function launchAttack() {
-  const target = el('attack-target').value;
-  const num = parseInt(el('attack-num').value) || 1;
-  if (!target) { alert('Choose a target team'); return; }
-  socket.emit('launchAttack', { targetTeam: target, numFighters: num }, (res) => {
-    if (res && !res.ok && res.error) alert(res.error);
-  });
 }
 
 function transferTi(amount) {
@@ -1225,7 +1215,7 @@ function render(state) {
   if (state.status === 'waiting') {
     hide('game-screen');
     hide('game-over');
-    myPrototypeWarFleets = []; // clear prototype design state between games
+
     // legacy selection cleared (removed)
     show('lobby-screen');
     renderLobby(state);
@@ -1238,7 +1228,6 @@ function render(state) {
   if (state.status === 'ended') {
     hide('game-screen');
     show('game-over');
-    myPrototypeWarFleets = []; // clear prototype design state
     // legacy selection cleared (removed)
     const banner = el('winner-banner');
     banner.textContent = state.winner ? '★ ' + state.winner + ' WINS ★' : 'GAME OVER';
@@ -1275,19 +1264,29 @@ function render(state) {
   // Find my team data early so it can be used throughout the render (including early gating logic)
   const myTeamData = state.teams.find(t => t.name === state.myTeam) || {};
 
-  // War section (expanded for new Ready Assets + Fleet Assembly prototype)
-  const btnAttack = el('btn-attack'); if (btnAttack) btnAttack.disabled = !(canControl && isWar);
-  const attackTarget = el('attack-target'); if (attackTarget) attackTarget.disabled = !(canControl && isWar);
-  const attackNum = el('attack-num'); if (attackNum) attackNum.disabled = !(canControl && isWar);
-  if (isWar && !isPureHost) hide('attack-disabled'); else show('attack-disabled');
-
-  // New prototype controls (Ready Assets + Assembly)
+  // War section — Ready Assets + Fleet Assembly
   const assetInputs = ['assign-frigates', 'assign-destroyers', 'admiral-select'];
   assetInputs.forEach(id => { const i = el(id); if (i) i.disabled = !(canControl && isWar); });
   const btnCommission = el('btn-commission');
   if (btnCommission) btnCommission.disabled = !(canControl && isWar);
   if (isWar && !isPureHost) hide('war-assets-disabled'); else show('war-assets-disabled');
   if (isWar && !isPureHost) hide('commission-disabled'); else show('commission-disabled');
+  if (isWar && !isPureHost) hide('peace-disabled'); else show('peace-disabled');
+  const btnOrderFleet = el('btn-order-fleet-map');
+  if (btnOrderFleet) btnOrderFleet.disabled = !(canControl && isWar);
+  const btnTacticalProbe = el('btn-tactical-probe');
+  if (btnTacticalProbe) btnTacticalProbe.disabled = !(canControl && isWar);
+  const btnSurveyProbe = el('btn-survey-probe');
+  if (btnSurveyProbe) btnSurveyProbe.disabled = !(canControl && isBuilder);
+  const btnDeployDrone = el('btn-deploy-drone-wing');
+  if (btnDeployDrone) btnDeployDrone.disabled = !(canControl && isWar);
+  const btnDeployMiner = el('btn-deploy-miner');
+  if (btnDeployMiner) btnDeployMiner.disabled = !(canControl && isBuilder);
+  const btnDeployFactory = el('btn-deploy-factory');
+  if (btnDeployFactory) btnDeployFactory.disabled = !(canControl && isBuilder);
+  document.querySelectorAll('#tab-builder button[onclick*="queueBuild"]').forEach(btn => {
+    btn.disabled = !(canControl && isBuilder);
+  });
 
   // Negotiator controls (now inside tab-negotiator)
   const tradeBtns = document.querySelectorAll('#tab-negotiator .btn');
@@ -1295,9 +1294,7 @@ function render(state) {
   const tradeTarget = el('trade-target'); if (tradeTarget) tradeTarget.disabled = !(canControl && isNeg);
   if (isNeg && !isPureHost) hide('trade-disabled'); else show('trade-disabled');
 
-  // Builder production buttons — client no longer force-disables them
-  // (server enforces via queueBuild handler + clear error message).
-  // The old 'build-disabled' note element was removed during UI grouping refactor.
+  // Builder production / deploy buttons gated above (Builder role only).
 
   // Old manual deploy-x/y panel has been removed (deprecated in favor of command-system flow:
   // Button on role tab → map → click destination → confirm).
@@ -1319,8 +1316,10 @@ function render(state) {
   // Update live assignment total (in case inputs are visible)
   if (typeof updateAssignTotal === 'function') updateAssignTotal();
 
-  // Render the Active War Fleets panel (the "moved" location for commissioned resources)
+  // Render the Active War Fleets panel + peace flags
   if (typeof renderWarFleets === 'function') renderWarFleets();
+  if (typeof renderDroneWings === 'function') renderDroneWings();
+  if (typeof renderPeacePanel === 'function') renderPeacePanel(state);
 
   // Negotiator tab currently read-only (trading out of scope for this pass)
 
@@ -1343,18 +1342,21 @@ function render(state) {
     factoryKitEl.textContent = (myTeamData.availableFactories != null) ? myTeamData.availableFactories : 0;
   }
 
-  // Probes (War Commander asset per playtest; visible to whole team)
+  const probeStock = (myTeamData.probes != null) ? myTeamData.probes : 0;
   const warProbeEl = el('war-probes');
-  if (warProbeEl) warProbeEl.textContent = (myTeamData.probes != null) ? myTeamData.probes : 0;
+  if (warProbeEl) warProbeEl.textContent = probeStock;
+  const builderProbeEl = el('builder-probes');
+  if (builderProbeEl) builderProbeEl.textContent = probeStock;
 
-  // Other teams (for trading + attack targets)
+  if (typeof window.renderAllTeamProbeActivity === 'function') {
+    window.renderAllTeamProbeActivity(state);
+  }
+
+  // Other teams (for trading)
   renderOtherTeams(state.teams, state.myTeam);
 
-  // Populate selects
+  // Populate negotiator trade target select
   populateActionTargets(state.teams, state.myTeam);
-
-  // Fleets
-  renderFleets(state.fleets);
 
   // Map (dynamic, supports 13/15/17)
   renderMap(state);
@@ -1470,26 +1472,6 @@ function renderOtherTeams(teams, myTeamName) {
 function populateActionTargets(teams, myTeamName) {
   const aliveOthers = teams.filter(t => t.name !== myTeamName && t.factoryHP > 0);
 
-  // Attack target
-  const atkSel = el('attack-target');
-  const prevAtk = atkSel.value;
-  atkSel.innerHTML = '';
-  if (aliveOthers.length === 0) {
-    const opt = document.createElement('option');
-    opt.textContent = '— no targets —';
-    atkSel.appendChild(opt);
-    atkSel.disabled = true;
-  } else {
-    atkSel.disabled = false;
-    aliveOthers.forEach(t => {
-      const opt = document.createElement('option');
-      opt.value = t.name;
-      opt.textContent = t.name;
-      atkSel.appendChild(opt);
-    });
-    if (prevAtk && aliveOthers.find(t => t.name === prevAtk)) atkSel.value = prevAtk;
-  }
-
   // Trade target
   const trSel = el('trade-target');
   const prevTr = trSel.value;
@@ -1511,298 +1493,8 @@ function populateActionTargets(teams, myTeamName) {
   }
 }
 
-function renderFleets(fleets) {
-  const c = el('fleets');
-  if (!fleets || fleets.length === 0) {
-    c.innerHTML = '<span style="color:#006633">No fleets in space.</span>';
-    return;
-  }
-  c.innerHTML = fleets.map(f =>
-    `<span style="color:#ffcc33">${f.from} → ${f.to}</span> : ${f.frigates || f.fighters || 0} FTR (ETA ${f.eta}s)`
-  ).join('<br>');
-}
-
 // renderBuildQueue moved to public/client/production.js (multi-factory support)
-
-// ============================================================
-// WAR FLEET PROTOTYPE FUNCTIONS (client-side design simulation only)
-// All state lives in myPrototypeWarFleets[] — never sent to server.
-// This demonstrates the requested "assets visible" + "select capitol + assign ≤6 total escorts"
-// + "fleet resource represented by single capitol ship moves to different UI location" behavior.
-// ============================================================
-
-function updateAssignTotal() {
-  const f = parseInt(el('assign-frigates').value) || 0;
-  const d = parseInt(el('assign-destroyers').value) || 0;
-  const total = f + d;
-  const totalEl = el('assign-total');
-  const errEl = el('assign-error');
-  if (totalEl) totalEl.textContent = total;
-
-  // Live validation feedback
-  if (errEl) {
-    if (total > 6) {
-      errEl.textContent = 'Total cannot exceed 6';
-      totalEl.style.color = '#ff3366';
-    } else {
-      errEl.textContent = '';
-      totalEl.style.color = '';
-    }
-  }
-
-  // Defensive: re-evaluate assembly lock state when user changes escort numbers
-  if (typeof updateAssemblyGating === 'function') updateAssemblyGating();
-}
-
-function adjustAssign(which, delta) {
-  const input = el('assign-' + which);
-  if (!input) return;
-  let val = parseInt(input.value) || 0;
-  val = Math.max(0, val + delta);
-  input.value = val;
-  updateAssignTotal();
-}
-
-function resetCapitolName() {
-  const input = el('capitol-name');
-  if (!input) return;
-  const adjectives = ['Vanguard','Sentinel','Aegis','Phoenix','Titan','Eclipse','Nemesis','Valor'];
-  const num = Math.floor(100 + Math.random() * 900);
-  input.value = adjectives[Math.floor(Math.random() * adjectives.length)] + '-' + num;
-}
-
-function getAvailableEscortsForDisplay(myTeamData) {
-  // Authoritative numbers from server, minus whatever this client has locally commissioned
-  const baseF = myTeamData.frigates || 0;
-  const baseD = myTeamData.destroyers || 0;
-  let usedF = 0, usedD = 0;
-  myPrototypeWarFleets.forEach(fl => {
-    usedF += fl.frigates || 0;
-    usedD += fl.destroyers || 0;
-  });
-  return {
-    frigates: Math.max(0, baseF - usedF),
-    destroyers: Math.max(0, baseD - usedD)
-  };
-}
-
-function commissionFleet() {
-  const admiralSel = el('admiral-select');
-  const fInput = el('assign-frigates');
-  const dInput = el('assign-destroyers');
-
-  const selectedAdmiralId = admiralSel ? admiralSel.value : '';
-  const selectedAdm = getAvailableAdmirals().find(a => a.id === selectedAdmiralId);
-
-  if (!selectedAdm) {
-    alert('You must select an Admiral to commission a fleet.');
-    return;
-  }
-
-  const f = parseInt(fInput && fInput.value) || 0;
-  const d = parseInt(dInput && dInput.value) || 0;
-  const total = f + d;
-
-  if (total < 1) {
-    alert('Assign at least 1 escort (frigate or destroyer).');
-    return;
-  }
-  if (total > 6) {
-    alert('A single Capitol Ship can command at most 6 combined escorts (prototype rule).');
-    return;
-  }
-
-  // Check against current authoritative numbers minus already commissioned
-  const myTeamData = (lastState && lastState.teams) ?
-    lastState.teams.find(t => t.name === lastState.myTeam) || {} : {};
-  const avail = getAvailableEscortsForDisplay(myTeamData);
-
-  if (f > avail.frigates || d > avail.destroyers) {
-    alert('Not enough unassigned escorts available right now (after prior commissions in this session).');
-    return;
-  }
-
-  // Create the fleet object — fleet name/identity = the Admiral's name
-  const fleet = {
-    id: 'proto-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7),
-    name: selectedAdm.name,           // ← Admiral name becomes the fleet identity
-    admiralId: selectedAdm.id,
-    admiralName: selectedAdm.name,
-    frigates: f,
-    destroyers: d,
-    health: Math.max(70, 80 + f * 2 + d * 4 + Math.floor(Math.random()*6)),
-    location: 'Home System',
-    destination: 'On Station',
-    commissionedAt: Date.now()
-  };
-
-  myPrototypeWarFleets.push(fleet);
-
-  // Consume the admiral from the unassigned pool
-  myPrototypeAdmirals = myPrototypeAdmirals.filter(a => a.id !== selectedAdm.id);
-
-  // Reset form
-  if (fInput) fInput.value = 0;
-  if (dInput) dInput.value = 0;
-  if (admiralSel) admiralSel.value = '';
-  updateAssignTotal();
-
-  if (lastState) render(lastState);
-
-  console.log('[PROTOTYPE] Commissioned fleet under Admiral:', selectedAdm.name);
-}
-
-function disbandPrototypeFleet(fleetId) {
-  const fleet = myPrototypeWarFleets.find(fl => fl.id === fleetId);
-  if (fleet && fleet.admiralId) {
-    // Return the admiral to the unassigned pool (prototype behavior)
-    const already = myPrototypeAdmirals.find(a => a.id === fleet.admiralId);
-    if (!already) {
-      myPrototypeAdmirals.push({ id: fleet.admiralId, name: fleet.admiralName || fleet.name });
-    }
-  }
-  myPrototypeWarFleets = myPrototypeWarFleets.filter(fl => fl.id !== fleetId);
-  if (lastState) render(lastState);
-}
-
-function renderWarFleets() {
-  const container = el('war-fleets');
-  if (!container) return;
-
-  if (!myPrototypeWarFleets || myPrototypeWarFleets.length === 0) {
-    container.innerHTML = '<span style="color:#006633;">No commissioned fleets (prototype only — use Assembly panel above).</span>';
-    return;
-  }
-
-  container.innerHTML = myPrototypeWarFleets.map(fl => {
-    const escortStr = `${fl.frigates || 0} F + ${fl.destroyers || 0} D`;
-    const healthColor = fl.health > 85 ? '#66ffaa' : (fl.health > 60 ? '#ffcc33' : '#ff3366');
-    const displayName = fl.admiralName || fl.name; // Admiral name is now the primary identity
-    return `
-      <div class="war-fleet-card">
-        <span class="capitol">${displayName}</span><br>
-        <span>Escorts: <strong>${escortStr}</strong></span> |
-        <span>Health: <span style="color:${healthColor}; font-weight:bold;">${fl.health}</span></span><br>
-        <span>Location: ${fl.location}</span>
-        <span style="color:#006633;">→</span>
-        <span>Dest: ${fl.destination}</span>
-        <button class="btn btn-small btn-danger" style="float:right; padding:1px 4px; font-size:9px;"
-                onclick="disbandPrototypeFleet('${fl.id}')">Disband</button>
-      </div>
-    `;
-  }).join('');
-}
-
-// ============================================================
-// END WAR FLEET PROTOTYPE (extended with Capitol + Admiral unassigned resources)
-// All of the above is 100% client-side design prototype. No server state is modified.
-// ============================================================
-
-// === NEW PROTOTYPE HELPERS for Capitol + Admirals + clearer production visibility ===
-function getAvailableCapitals() {
-  return Math.max(0, myPrototypeCapitolHulls || 0);
-}
-
-function getAvailableAdmirals() {
-  return myPrototypeAdmirals || [];
-}
-
-function renderReadyAssets(myTeamData) {
-  // Frigates — show Available (net after prototype commissions) + Total owned so production is obvious
-  const baseF = myTeamData.frigates || 0;
-  let usedF = 0;
-  myPrototypeWarFleets.forEach(fl => { usedF += fl.frigates || 0; });
-  const availF = Math.max(0, baseF - usedF);
-
-  const fEl = el('war-frigates');
-  const fTot = el('war-frigates-total');
-  if (fEl) fEl.textContent = availF;
-  if (fTot) fTot.textContent = baseF;
-
-  // Destroyers
-  const baseD = myTeamData.destroyers || 0;
-  let usedD = 0;
-  myPrototypeWarFleets.forEach(fl => { usedD += fl.destroyers || 0; });
-  const availD = Math.max(0, baseD - usedD);
-
-  const dEl = el('war-destroyers');
-  const dTot = el('war-destroyers-total');
-  if (dEl) dEl.textContent = availD;
-  if (dTot) dTot.textContent = baseD;
-
-  // Capitol Hulls (prototype — normally 0)
-  const cEl = el('war-capitols');
-  if (cEl) cEl.textContent = getAvailableCapitals();
-
-  // Admirals (prototype count)
-  const aEl = el('war-admirals');
-  if (aEl) aEl.textContent = getAvailableAdmirals().length;
-
-  // Legacy counters (keep working)
-  const legacyEl = el('war-fighters-legacy');
-  if (legacyEl) legacyEl.textContent = baseF;
-  const old = el('war-fighters');
-  if (old) old.textContent = baseF;
-
-  // Update assembly form enabled/locked state + populate admiral select
-  updateAssemblyGating();
-}
-
-function updateAssemblyGating() {
-  const hasCapitol = getAvailableCapitals() > 0;
-  const hasAdmirals = getAvailableAdmirals().length > 0;
-  const canAssemble = hasCapitol && hasAdmirals;
-
-  const panel = el('fleet-assembly-panel');
-  const banner = el('assembly-locked-banner');
-  const admiralSel = el('admiral-select');
-  const inputs = [el('assign-frigates'), el('assign-destroyers')];
-  const btn = el('btn-commission');
-
-  // Populate admiral select every time (cheap)
-  if (admiralSel) {
-    const current = admiralSel.value;
-    admiralSel.innerHTML = '';
-    const adms = getAvailableAdmirals();
-    if (adms.length === 0) {
-      const opt = document.createElement('option');
-      opt.value = '';
-      opt.textContent = '(no admirals available — use demo button above)';
-      admiralSel.appendChild(opt);
-    } else {
-      const placeholder = document.createElement('option');
-      placeholder.value = '';
-      placeholder.textContent = '— select admiral —';
-      admiralSel.appendChild(placeholder);
-      adms.forEach(a => {
-        const opt = document.createElement('option');
-        opt.value = a.id;
-        opt.textContent = a.name;
-        admiralSel.appendChild(opt);
-      });
-    }
-    if (current && adms.find(a => a.id === current)) admiralSel.value = current;
-  }
-
-  const shouldLock = !canAssemble;
-  if (banner) banner.style.display = shouldLock ? 'block' : 'none';
-
-  // Disable/enable the interactive parts
-  if (admiralSel) admiralSel.disabled = shouldLock || !hasCapitol;
-  inputs.forEach(i => { if (i) i.disabled = shouldLock; });
-  if (btn) btn.disabled = shouldLock;
-
-  // Visual cue on the whole panel
-  if (panel) {
-    if (shouldLock) {
-      panel.style.opacity = '0.65';
-      panel.style.borderColor = '#442200';
-    } else {
-      panel.style.opacity = '';
-      panel.style.borderColor = '';
-    }
-  }
-}
+// War fleet UI lives in public/client/war-fleets.js
 
 // Render the 6 resources for the Builder (exact order from prompt)
 // Always shows all 6 materials with FULL NAMES (no acronyms) in the main resource UI.
@@ -1886,15 +1578,6 @@ socket.on('disconnect', () => {
   if (status) status.textContent = 'DISCONNECTED — REFRESH TO REJOIN';
 });
 
-// Keyboard shortcut
-document.addEventListener('keydown', (e) => {
-  if (e.key === '/' && document.activeElement.tagName === 'BODY') {
-    e.preventDefault();
-    const atk = el('attack-num');
-    if (atk) atk.focus();
-  }
-});
-
 // Initial focus
 setTimeout(() => {
   const codeInput = el('join-code');
@@ -1906,7 +1589,9 @@ console.log('%c[STAR POINT] Team-based client ready', 'color:#006633');
 
 <!-- Separated client logic (start of modularization per ARCHITECTURE.md soft rule) -->
 <script src="/client/mining-deployment.js"></script>
+<script src="/client/probe-activity.js"></script>
 <script src="/client/command-system.js"></script>
+<script src="/client/war-fleets.js"></script>
 <script src="/client/production.js"></script>
 <script src="/client/mining-rates.js"></script>
 <script src="/client/map.js"></script>

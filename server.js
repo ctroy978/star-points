@@ -7,7 +7,10 @@ const fs = require('fs');
 const db = require('./db');
 const production = require('./server/production');
 const probes = require('./server/probes');
+const visibility = require('./server/visibility');
 const factories = require('./server/factories');
+const mapFleets = require('./server/fleets');
+const droneWings = require('./server/drone-wings');
 
 const app = express();
 const server = http.createServer(app);
@@ -84,7 +87,8 @@ const BUILD_COSTS = {
   // NEW: Admiral (produced via Military Academy at home base)
   admiral:   [10, 7, 5, 6, 4, 3],
   // NEW: Capitol Ship (command center for fleet formation, no combat role)
-  capitol:   [35, 24, 15, 20, 12, 9]
+  capitol:   [35, 24, 15, 20, 12, 9],
+  drone_wing: [3, 2, 1, 3, 0, 1]
 };
 
 const BUILD_TIMES = {
@@ -99,7 +103,8 @@ const BUILD_TIMES = {
   // NEW: Admiral production time (via home Military Academy)
   admiral: 75,
   // NEW: Capitol Ship build time (major project)
-  capitol: 240
+  capitol: 240,
+  drone_wing: 28
 };
 
 // MINING: Core tuning constants (exposed for easy balancing, per plan)
@@ -146,10 +151,6 @@ const RESOURCE_BASE_RANGES = {
   'Antimatter Catalyst': { min: 4,  max: 8  },
   'Neurocryst':          { min: 2,  max: 5  }
 };
-
-// Legacy combat constants kept minimal (war scope reduced for this pass)
-const TRAVEL_TIME = 8;               // seconds for fleets
-const FRIGATE_DAMAGE = 7;            // per survivor (no more Defense Canon interception)
 
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no confusing chars
 
@@ -259,7 +260,7 @@ class Team {
 
     // Starter kit per playtest feedback:
     // - Builder starts with 1 mining rig ready to deploy immediately
-    // - War Commander starts with 1 probe ready to deploy immediately
+    // - Shared team probe stock (Builder/War launch by role)
     this.availableMiners = 1;
     this.probes = 1;
 
@@ -267,9 +268,14 @@ class Team {
     this.availableFactories = 0;  // factory kits ready to deploy to moons (1 per moon max)
     this.availableAdmirals = 0;   // produced at home Military Academy
     this.capitolShips = 0;        // command vessels for fleet formation
+    this.admiralRoster = [];      // unassigned admirals from production [{ id, name }]
+    this.peaceWith = {};          // one-sided peace flags: { EnemyTeam: true }
 
     // Probe intel keyed by anomaly id (mirrors anomaly.discoveredBy for this team)
     this.probeIntel = {};
+
+    // War Commander skirmish stock (Builder queues drone_wing)
+    this.droneWings = 1;
   }
 
   getRolePlayer(role) {
@@ -312,7 +318,6 @@ class Game {
     this.hostSocketId = hostSocketId;
     this.status = 'waiting';           // waiting | running | ended
     this.teams = new Map();            // teamName -> Team
-    this.fleets = [];                  // in-transit
     this.eventLog = [];
     this.tickCounter = 0;
     this.winner = null;
@@ -326,6 +331,12 @@ class Game {
 
     // FACTORIES: spatial buildings. 1 per moon max + starting home base factory.
     this.factories = [];
+
+    // MAP FLEETS: commissioned task forces on the grid
+    this.deployedFleets = [];
+
+    // DRONE WINGS: light harassment units (War deploys from stock)
+    this.deployedDroneWings = [];
 
     // Map system (new for ui-map branch)
     this.mapSize = 13;                 // 13, 15, or 17
@@ -345,8 +356,8 @@ class Game {
     return this.teams.get(teamName);
   }
 
-  // Add player to a team and assign next available role
-  addPlayerToTeam(teamName, playerName, socketId) {
+  // Add player to a team and assign next available role (optional preferredRole if open)
+  addPlayerToTeam(teamName, playerName, socketId, preferredRole = null) {
     const team = this.getOrCreateTeam(teamName);
 
     // Rejoin: same player name on same team keeps their role
@@ -364,13 +375,17 @@ class Game {
       throw new Error('Maximum number of teams reached');
     }
 
-    // Assign next role in order
     const usedRoles = new Set(Array.from(team.players.values()).map(p => p.role));
     let assignedRole = null;
-    for (const r of ROLE_ORDER) {
-      if (!usedRoles.has(r)) {
-        assignedRole = r;
-        break;
+
+    if (preferredRole && ROLE_ORDER.includes(preferredRole) && !usedRoles.has(preferredRole)) {
+      assignedRole = preferredRole;
+    } else {
+      for (const r of ROLE_ORDER) {
+        if (!usedRoles.has(r)) {
+          assignedRole = r;
+          break;
+        }
       }
     }
     if (!assignedRole) assignedRole = 'war'; // fallback (shouldn't happen)
@@ -422,7 +437,12 @@ function persistGameState(game) {
         // MINING: persist availableMiners + probes (Phase 0/6)
         availableMiners: team.availableMiners || 0,
         probes: team.probes || 0,
+        droneWings: team.droneWings || 0,
         availableFactories: team.availableFactories || 0,
+        availableAdmirals: (team.admiralRoster || []).length,
+        capitolShips: team.capitolShips || 0,
+        admiralRoster: team.admiralRoster || [],
+        peaceWith: team.peaceWith || {},
         deployedMiners: teamMiners,
         buildQueues: team.buildQueues || []
       });
@@ -430,12 +450,6 @@ function persistGameState(game) {
       for (const p of team.players.values()) {
         db.addOrUpdatePlayer(game.code, team.name, p.name, p.role);
       }
-    }
-
-    // Replace fleets for this game (simple approach)
-    db.clearFleetsForGame(game.code);
-    for (const f of game.fleets) {
-      db.addFleet(game.code, f.from, f.to, f.frigates ?? f.fighters ?? 0, f.arrivalTime);
     }
 
     // === NEW: Persist map data if it exists ===
@@ -454,6 +468,14 @@ function persistGameState(game) {
 
     if (game.factories && game.factories.length > 0) {
       db.saveGameFactories(game.code, game.factories);
+    }
+
+    if (game.deployedFleets) {
+      db.saveGameDeployedFleets(game.code, game.deployedFleets);
+    }
+
+    if (game.deployedDroneWings) {
+      db.saveGameDeployedDroneWings(game.code, game.deployedDroneWings);
     }
   } catch (e) {
     console.error('[DB] Persist error:', e.message);
@@ -482,9 +504,15 @@ function hydrateSavedGame(saved) {
     // MINING: hydrate availableMiners (defaults 0 for old saves) — Phase 0/6
     team.availableMiners = (t.availableMiners != null) ? t.availableMiners : 0;
     team.probes = (t.probes != null) ? t.probes : 0;
+    team.droneWings = (t.droneWings != null) ? t.droneWings : 1;
     team.availableFactories = (t.availableFactories != null) ? t.availableFactories : 0;
     team.availableAdmirals = (t.availableAdmirals != null) ? t.availableAdmirals : 0;
     team.capitolShips = (t.capitolShips != null) ? t.capitolShips : 0;
+    team.admiralRoster = Array.isArray(t.admiralRoster) ? t.admiralRoster.map(a => ({ id: a.id, name: a.name })) : [];
+    team.peaceWith = (t.peaceWith && typeof t.peaceWith === 'object') ? { ...t.peaceWith } : {};
+    if (team.admiralRoster.length > 0) {
+      team.availableAdmirals = team.admiralRoster.length;
+    }
 
     // Migrate old single-queue saves to the new multi-factory queue system
     if (Array.isArray(t.buildQueues) && t.buildQueues.length > 0) {
@@ -518,15 +546,6 @@ function hydrateSavedGame(saved) {
       });
     }
   }
-
-  // Rebuild fleets (support legacy key during transition)
-  game.fleets = saved.fleets.map(f => ({
-    id: Date.now() + Math.random(),
-    from: f.from,
-    to: f.to,
-    frigates: f.frigates ?? f.fighters ?? 0,
-    arrivalTime: f.arrivalTime
-  }));
 
   // MINING Phase 6: rebuild deployedMiners from per-team JSON in saved data
   game.deployedMiners = [];
@@ -576,6 +595,38 @@ function hydrateSavedGame(saved) {
       setupCompleteTime: f.state === 'setting_up' ? (Date.now() + factories.FACTORY_SETUP_TIME_MS) : null
     }));
     console.log(`[DB] Restored ${game.factories.length} factory record(s) for ${saved.code}`);
+  }
+
+  if (saved.deployedFleets && Array.isArray(saved.deployedFleets)) {
+    game.deployedFleets = saved.deployedFleets.map(f => ({
+      id: f.id || ('fleet-' + Math.random().toString(36).slice(2)),
+      teamName: f.teamName,
+      admiralId: f.admiralId,
+      admiralName: f.admiralName,
+      x: f.x ?? 0,
+      y: f.y ?? 0,
+      state: f.state || 'stationed',
+      targetX: f.targetX ?? f.x ?? 0,
+      targetY: f.targetY ?? f.y ?? 0,
+      frigates: f.frigates || 0,
+      destroyers: f.destroyers || 0,
+      capitolHP: f.capitolHP ?? 100
+    }));
+    console.log(`[DB] Restored ${game.deployedFleets.length} deployed fleet(s) for ${saved.code}`);
+  }
+
+  if (saved.deployedDroneWings && Array.isArray(saved.deployedDroneWings)) {
+    game.deployedDroneWings = saved.deployedDroneWings.map(w => ({
+      id: w.id || ('wing-' + Math.random().toString(36).slice(2)),
+      teamName: w.teamName,
+      x: w.x ?? 0,
+      y: w.y ?? 0,
+      state: w.state || 'stationed',
+      targetX: w.targetX ?? w.x ?? 0,
+      targetY: w.targetY ?? w.y ?? 0,
+      hp: w.hp ?? droneWings.DRONE_WING_START_HP
+    }));
+    console.log(`[DB] Restored ${game.deployedDroneWings.length} drone wing(s) for ${saved.code}`);
   }
 
   // Ensure home factories exist for restored games (the spatial factory system)
@@ -630,10 +681,10 @@ setInterval(() => {
     game.tickCounter++;
 
     production.processBuilds(game);
-    processFleets(game);
 
     // Moon orbits (slow movement)
     processMoonOrbits(game);
+    factories.reconcileMoonAttachedMiners(game);
 
     // MINING: process miner movement + setup timers + mining yields (Phase 1/2/3)
     processMinerMovement(game);
@@ -643,6 +694,12 @@ setInterval(() => {
     // Forward factory kits: travel to moons, setup, then join build queue pool
     factories.processFactoryMovement(game, debugLog);
     factories.processFactorySetup(game, debugLog);
+
+    // MAP FLEETS: movement + combat for commissioned task forces
+    mapFleets.processFleetMovement(game, debugLog);
+
+    // DRONE WINGS: skirmish harassment units
+    droneWings.processDroneWingMovement(game, debugLog);
 
     // PROBES: fast-moving short-lived reconnaissance units
     probes.processProbeMovement(game);
@@ -682,6 +739,9 @@ function broadcastState(game) {
       label: ROLE_LABELS[p.role]
     }));
 
+    const escortsCommitted = mapFleets.getEscortsCommitted(game, t.name);
+    const committed = mapFleets.getAvailableEscorts(t, game);
+
     teams.push({
       name: t.name,
       resources: { ...t.resources },           // full 6-resource object
@@ -695,10 +755,18 @@ function broadcastState(game) {
       // MINING: broadcast availableMiners count (for Builder UI) — Phase 0
       availableMiners: t.availableMiners || 0,
       probes: t.probes || 0,
+      droneWings: t.droneWings || 0,
+      deployedDroneWingsCount: (game.deployedDroneWings || []).filter(w => w.teamName === t.name).length,
       // NEW infrastructure
       availableFactories: t.availableFactories || 0,
-      availableAdmirals: t.availableAdmirals || 0,
+      availableAdmirals: (t.admiralRoster || []).length,
       capitolShips: t.capitolShips || 0,
+      admiralRoster: (t.admiralRoster || []).map(a => ({ id: a.id, name: a.name })),
+      peaceWith: { ...(t.peaceWith || {}) },
+      availableFrigates: committed.frigates,
+      availableDestroyers: committed.destroyers,
+      availableCapitols: mapFleets.getAvailableCapitols(t, game),
+      escortsCommitted,
       // NEW: Multiple build queues (one per operational factory)
       buildQueues: (t.buildQueues || []).map(q => ({
         factoryId: q.factoryId,
@@ -707,14 +775,6 @@ function broadcastState(game) {
       }))
     });
   }
-
-  // Fleets with ETAs (frigates only in this pass)
-  const fleets = game.fleets.map(f => ({
-    from: f.from,
-    to: f.to,
-    frigates: f.frigates ?? f.fighters ?? 0,
-    eta: Math.max(1, Math.ceil((f.arrivalTime - Date.now()) / 1000))
-  }));
 
   // Build status per team — now multiple queues (one per operational factory)
   const builds = {};
@@ -732,89 +792,129 @@ function broadcastState(game) {
     };
   }
 
+  function serializeMinerForClient(m) {
+    const payload = {
+      id: m.id,
+      teamName: m.teamName,
+      x: m.x,
+      y: m.y,
+      state: m.state,
+      targetX: m.targetX,
+      targetY: m.targetY,
+      targetObject: m.targetObject || null
+    };
+    if (m.state === 'setting_up' && m.setupCompleteTime) {
+      payload.setupRemaining = Math.max(0, Math.ceil((m.setupCompleteTime - Date.now()) / 1000));
+    }
+    return payload;
+  }
+
+  function allFactoriesForClient() {
+    if (game.factories && game.factories.length > 0) {
+      return game.factories.map(f => factories.serializeFactoryForClient(f, game));
+    }
+    if (game.map && game.map.starts) {
+      return Object.entries(game.map.starts).map(([teamName, pos]) => ({
+        id: 'factory-home-' + teamName,
+        teamName,
+        x: pos.x,
+        y: pos.y,
+        state: 'operational',
+        isHome: true
+      }));
+    }
+    return [];
+  }
+
+  function buildVisibilityPayload(viewingTeam) {
+    const miners = viewingTeam
+      ? visibility.filterVisibleMiners(game, viewingTeam).map(serializeMinerForClient)
+      : (game.deployedMiners || []).map(serializeMinerForClient);
+
+    const factoryList = viewingTeam
+      ? visibility.filterVisibleFactories(game, viewingTeam)
+      : (game.factories || []);
+    const factoriesPayload = factoryList.length > 0
+      ? factoryList.map(f => factories.serializeFactoryForClient(f, game))
+      : (viewingTeam ? [] : allFactoriesForClient());
+
+    const deployedFleetsPayload = viewingTeam
+      ? visibility.filterVisibleDeployedFleets(game, viewingTeam).map(mapFleets.serializeDeployedFleetForClient)
+      : (game.deployedFleets || []).map(mapFleets.serializeDeployedFleetForClient);
+
+    let deployedDroneWingsPayload;
+    if (viewingTeam) {
+      const own = (game.deployedDroneWings || []).filter(w => w.teamName === viewingTeam);
+      const enemyVisible = visibility.filterVisibleDroneWings(game, viewingTeam)
+        .filter(w => w.teamName !== viewingTeam);
+      const merged = [...own];
+      for (const ew of enemyVisible) {
+        if (!merged.find(w => w.id === ew.id)) merged.push(ew);
+      }
+      deployedDroneWingsPayload = merged.map(droneWings.serializeDroneWingForClient);
+    } else {
+      deployedDroneWingsPayload = (game.deployedDroneWings || []).map(droneWings.serializeDroneWingForClient);
+    }
+
+    return {
+      deployedMiners: miners,
+      factories: factoriesPayload,
+      deployedFleets: deployedFleetsPayload,
+      deployedDroneWings: deployedDroneWingsPayload
+    };
+  }
+
+  function buildProbesPayload(viewingTeam) {
+    const list = viewingTeam
+      ? (game.deployedProbes || []).filter(p => p.teamName === viewingTeam)
+      : (game.deployedProbes || []);
+    return list.map(p => probes.serializeProbeForClient(p, game.tickCounter));
+  }
+
   const basePayload = {
     code: game.code,
     status: game.status,
     teams,
-    fleets,
     builds,
     eventLog: [...game.eventLog],
     winner: game.winner,
-    // MINING: deployedMiners broadcast (Phase 1) — client filters for own team mostly
-    deployedMiners: game.deployedMiners ? game.deployedMiners.map(m => {
-      const payload = {
-        id: m.id,
-        teamName: m.teamName,
-        x: m.x,
-        y: m.y,
-        state: m.state,
-        targetX: m.targetX,
-        targetY: m.targetY,
-        targetObject: m.targetObject || null
-      };
-      if (m.state === 'setting_up' && m.setupCompleteTime) {
-        payload.setupRemaining = Math.max(0, Math.ceil((m.setupCompleteTime - Date.now()) / 1000));
-      }
-      return payload;
-    }) : [],
 
-    // PROBES: short-lived mobile reconnaissance units (visible primarily to owning team)
-    deployedProbes: game.deployedProbes ? game.deployedProbes.map(p => ({
-      id: p.id,
-      teamName: p.teamName,
-      x: p.x,
-      y: p.y,
-      targetX: p.targetX,
-      targetY: p.targetY,
-      state: p.state,
-      scanRemaining: p.state === 'scanning' && p.scanCompleteTick
-        ? Math.max(0, p.scanCompleteTick - game.tickCounter)
-        : null
-    })) : [],
-
-    // FACTORIES: spatial (home base + deployed to moons, 1 per moon max)
-    // Ensure home factories are always present in state sent to clients
-    factories: (game.factories && game.factories.length > 0) ? game.factories.map(f =>
-      factories.serializeFactoryForClient(f, game)
-    ) : (game.map && game.map.starts ? Object.entries(game.map.starts).map(([teamName, pos]) => ({
-      id: 'factory-home-' + teamName,
-      teamName,
-      x: pos.x,
-      y: pos.y,
-      state: 'operational',
-      isHome: true
-    })) : []),
-    // Map data (new)
-    mapSize: game.mapSize,
-    map: game.map ? {
-      gasGiant: game.map.gasGiant,
-      // moons: legacy array removed — all moons live in anomalies (large_moon / small_moon)
-      anomalies: game.map.anomalies || []
-    } : null
+    mapSize: game.mapSize
   };
 
   // Send to regular players (they have role + team)
   for (const [socketId, info] of socketToPlayer) {
     if (info.game.code !== game.code) continue;
 
+    const visibilityPayload = buildVisibilityPayload(info.teamName);
     const payload = {
       ...basePayload,
+      ...visibilityPayload,
+      map: visibility.buildMapPayloadForTeam(game, info.teamName),
+      revealedAnomalyIds: visibility.getRevealedAnomalyIdsForTeam(game, info.teamName),
+      deployedProbes: buildProbesPayload(info.teamName),
+      teamProbeActivity: probes.buildTeamProbeActivity(game, info.teamName),
       myTeam: info.teamName,
       myRole: info.role,
       myRoleLabel: ROLE_LABELS[info.role],
       isHost: game.hostSocketId === socketId
     };
 
-    // Give this player their private starting location only
     payload.myStart = getTeamStart(game, info.teamName);
 
     io.to(socketId).emit('gameUpdate', payload);
   }
 
-  // Explicitly send to the pure host (if they are not also in socketToPlayer)
+  // Pure host (no team): full visibility for classroom oversight
   if (game.hostSocketId && !socketToPlayer.has(game.hostSocketId)) {
+    const visibilityPayload = buildVisibilityPayload(null);
     const hostPayload = {
       ...basePayload,
+      ...visibilityPayload,
+      map: visibility.buildMapPayloadForTeam(game, null),
+      revealedAnomalyIds: [],
+      deployedProbes: buildProbesPayload(null),
+      teamProbeActivity: [],
       myTeam: null,
       myRole: null,
       myRoleLabel: null,
@@ -884,6 +984,7 @@ function _old_processBuilds_removed(game) {
           else if (current.type === 'factory') team.availableFactories = (team.availableFactories || 0) + 1;
           else if (current.type === 'admiral') team.availableAdmirals = (team.availableAdmirals || 0) + 1;
           else if (current.type === 'capitol') team.capitolShips = (team.capitolShips || 0) + 1;
+          else if (current.type === 'drone_wing') team.droneWings = (team.droneWings || 0) + 1;
 
           const factoryLabel = operationalFactories[i]?.isHome ? 'Home Base' : 'Forward Factory';
           game.addEvent(`[${team.name}] completed 1 ${current.type.toUpperCase()} at ${factoryLabel}`);
@@ -892,55 +993,6 @@ function _old_processBuilds_removed(game) {
       }
     }
   }
-}
-
-function processFleets(game) {
-  const now = Date.now();
-  const stillInFlight = [];
-
-  for (const fleet of game.fleets) {
-    if (fleet.arrivalTime <= now) {
-      resolveCombat(game, fleet);
-    } else {
-      stillInFlight.push(fleet);
-    }
-  }
-  game.fleets = stillInFlight;
-}
-
-function resolveCombat(game, fleet) {
-  const attackerTeam = game.getTeamByName(fleet.from);
-  const defenderTeam = game.getTeamByName(fleet.to);
-
-  const originalCount = fleet.frigates ?? fleet.fighters ?? 0;
-
-  if (!defenderTeam || defenderTeam.factoryHP <= 0) {
-    if (attackerTeam && attackerTeam.factoryHP > 0) {
-      attackerTeam.frigates += originalCount;
-    }
-    game.addEvent(`Fleet from ${fleet.from} returned safely (${fleet.to} already destroyed)`);
-    return;
-  }
-
-  // Defense Canon fully removed per prompt — no interception in this pass
-  const survivors = originalCount;
-  const damage = survivors * FRIGATE_DAMAGE;
-
-  defenderTeam.factoryHP = Math.max(0, defenderTeam.factoryHP - damage);
-
-  let msg = `${fleet.from} attacked ${fleet.to} with ${originalCount} FTR. `;
-  if (survivors > 0) {
-    msg += `${survivors} hit for ${damage} damage`;
-    if (attackerTeam && attackerTeam.factoryHP > 0) {
-      attackerTeam.frigates += survivors;
-      msg += ` — ${survivors} returned.`;
-    } else {
-      msg += ` (attacker eliminated, survivors lost).`;
-    }
-  } else {
-    msg += `All destroyed, no damage.`;
-  }
-  game.addEvent(msg);
 }
 
 function checkWinCondition(game) {
@@ -1174,11 +1226,27 @@ function processMoonOrbits(game) {
       finalX = gas.x + (Math.random() > 0.5 ? 1 : -1);
     }
 
+    const blockedByStatic = game.map.anomalies.some(other =>
+      other !== a &&
+      other.x === finalX && other.y === finalY &&
+      !other.orbitRadius
+    );
+    if (blockedByStatic) {
+      debugLog(game, `MOON BLOCKED: ${a.name} (${a.type}) cannot move to (${finalX},${finalY}) — static anomaly at cell`);
+      return;
+    }
+
+    const oldX = a.x;
+    const oldY = a.y;
+    if (oldX === finalX && oldY === finalY) return;
+
     a.x = finalX;
     a.y = finalY;
     a.lastMoveTime = now;
 
-    debugLog(game, `MOON MOVE: ${a.name} (${a.type}) to (${a.x},${a.y}) phase=${a.phase.toFixed(2)}`);
+    factories.syncMoonAttachedUnits(game, a, oldX, oldY);
+
+    debugLog(game, `MOON MOVE: ${a.name} (${a.type}) from=(${oldX},${oldY}) to (${a.x},${a.y}) phase=${a.phase.toFixed(2)}`);
   });
 }
 
@@ -1188,12 +1256,28 @@ function processMinerSetup(game) {
   const now = Date.now();
   for (const miner of game.deployedMiners) {
     if (miner.state === 'setting_up' && miner.setupCompleteTime && now >= miner.setupCompleteTime) {
+      const anom = factories.getPrimaryAnomalyAt(game, miner.x, miner.y);
+
       miner.state = 'mining';
-      miner.miningSite = { x: miner.x, y: miner.y, type: null };
+      if (anom && factories.isMoonType(anom.type) && (anom.id || anom.name)) {
+        miner.targetObject = anom.id || anom.name;
+      }
+      miner.miningSite = {
+        x: miner.x,
+        y: miner.y,
+        type: anom?.type || null,
+        objectId: miner.targetObject || null
+      };
+
+      if (anom && probes.revealAnomalyForTeam(game, miner.teamName, anom)) {
+        const label = anom.name || anom.type || `(${miner.x},${miner.y})`;
+        game.addEvent(`[${miner.teamName}] Mining rig surveyed ${label} — resources now known to your team`);
+        debugLog(game, `MINER SURVEY: team=${miner.teamName} id=${miner.id} site=${label}`);
+      }
+
       const siteKey = `(${miner.x},${miner.y})`;
       game.addEvent(`[${miner.teamName}] Miner setup complete at ${siteKey} — now producing resources`);
       debugLog(game, `MINER MINING: team=${miner.teamName} id=${miner.id} at=(${miner.x},${miner.y})`);
-      // Clear timer
       miner.setupCompleteTime = null;
     }
   }
@@ -1211,19 +1295,35 @@ function processMinerMining(game) {
   if (MINING_TICKS < 1 || (game.tickCounter % MINING_TICKS) !== 0) return;
 
   const size = game.mapSize || 13;
-  const anomalyMap = new Map(); // "x,y" -> {x,y,type}
+  const anomalyMap = new Map(); // "x,y" -> highest-priority anomaly at cell
   for (const a of game.map.anomalies) {
-    anomalyMap.set(`${a.x},${a.y}`, a);
+    const key = `${a.x},${a.y}`;
+    const existing = anomalyMap.get(key);
+    if (!existing) {
+      anomalyMap.set(key, a);
+    } else {
+      anomalyMap.set(key, factories.getPrimaryAnomalyAt([existing, a], a.x, a.y));
+    }
   }
 
-  // Group only fully 'mining' state rigs by cell (Phase 3: setup does not yield yet)
-  const cellRigs = {}; // key -> { total: num, byTeam: {team: count} }
+  // Group only fully 'mining' state rigs by site (moon attachment uses targetObject)
+  const cellRigs = {}; // key -> { total, byTeam, anomaly }
   for (const m of game.deployedMiners) {
-    if (m.state !== 'mining') continue; // ONLY active mining rigs contribute
-    const key = `${m.x},${m.y}`;
-    if (!anomalyMap.has(key)) continue; // no yield off anomaly
+    if (m.state !== 'mining') continue;
 
-    if (!cellRigs[key]) cellRigs[key] = { total: 0, byTeam: {} };
+    let anomaly = null;
+    if (m.targetObject) {
+      anomaly = (game.map.anomalies || []).find(a =>
+        a.id === m.targetObject || a.name === m.targetObject
+      ) || null;
+    }
+    if (!anomaly) {
+      anomaly = anomalyMap.get(`${m.x},${m.y}`) || null;
+    }
+    if (!anomaly) continue;
+
+    const key = `${anomaly.x},${anomaly.y}`;
+    if (!cellRigs[key]) cellRigs[key] = { total: 0, byTeam: {}, anomaly };
     cellRigs[key].total++;
     const tname = m.teamName;
     cellRigs[key].byTeam[tname] = (cellRigs[key].byTeam[tname] || 0) + 1;
@@ -1234,7 +1334,7 @@ function processMinerMining(game) {
     const totalRigs = data.total;
     if (totalRigs < 1) continue;
     const [cx, cy] = key.split(',').map(Number);
-    const anomaly = anomalyMap.get(key);
+    const anomaly = data.anomaly || anomalyMap.get(key);
     const base = YIELD_BASE[anomaly.type] || 1;
     const stackIdx = Math.min(STACKING_MULTIPLIERS.length - 1, Math.max(0, totalRigs - 1));
     const mult = STACKING_MULTIPLIERS[stackIdx];
@@ -1254,102 +1354,6 @@ function processMinerMining(game) {
       }
     }
   }
-}
-
-// === PROBE RECONNAISSANCE (new functional system) ===
-// Fast-moving, short-lived units. They travel quickly, snapshot a small area (max 5 cells),
-// reveal anomalies for their team, then disappear.
-function processProbeMovement(game) {
-  if (!game.deployedProbes || game.deployedProbes.length === 0) return;
-  if (!game.map || !game.map.anomalies || !game.map.gasGiant) return;
-
-  const size = game.mapSize || 13;
-  const gasX = game.map.gasGiant.x;
-  const gasY = game.map.gasGiant.y;
-
-  const toKeep = [];
-
-  for (const probe of game.deployedProbes) {
-    if (probe.state !== 'moving') {
-      toKeep.push(probe);
-      continue;
-    }
-
-    // Fast movement — probes update position on most ticks
-    const shouldMove = (game.tickCounter % PROBE_MOVE_TICKS) === 0;
-    if (!shouldMove) {
-      toKeep.push(probe);
-      continue;
-    }
-
-    const tx = probe.targetX;
-    const ty = probe.targetY;
-
-    // Arrived at destination?
-    if (probe.x === tx && probe.y === ty) {
-      // Perform small snapshot (plus shape = center + 4 directions = 5 cells max)
-      const snapshotCells = [
-        { x: tx, y: ty },
-        { x: tx, y: ty - 1 },
-        { x: tx, y: ty + 1 },
-        { x: tx - 1, y: ty },
-        { x: tx + 1, y: ty }
-      ].filter(c => c.x >= 0 && c.x < size && c.y >= 0 && c.y < size);
-
-      let revealed = 0;
-      for (const cell of snapshotCells) {
-        for (const anom of game.map.anomalies) {
-          if (anom.x === cell.x && anom.y === cell.y) {
-            if (!anom.discoveredBy) anom.discoveredBy = {};
-            if (!anom.discoveredBy[probe.teamName]) {
-              anom.discoveredBy[probe.teamName] = true;
-              revealed++;
-            }
-          }
-        }
-      }
-
-      const msg = revealed > 0
-        ? `[${probe.teamName}] Probe completed snapshot near (${tx},${ty}) — revealed ${revealed} anomaly(ies)`
-        : `[${probe.teamName}] Probe completed snapshot near (${tx},${ty}) — nothing new`;
-      game.addEvent(msg);
-      debugLog(game, `PROBE SNAPSHOT: team=${probe.teamName} at=(${tx},${ty}) revealed=${revealed}`);
-
-      // Probe disappears after snapshot
-      continue;
-    }
-
-    // Move one step toward target (simple greedy, avoid gas giant)
-    let nx = probe.x;
-    let ny = probe.y;
-
-    const dx = tx - probe.x;
-    const dy = ty - probe.y;
-
-    if (Math.abs(dx) > Math.abs(dy)) {
-      nx = probe.x + Math.sign(dx);
-    } else if (dy !== 0) {
-      ny = probe.y + Math.sign(dy);
-    }
-
-    // Avoid gas giant
-    if (nx === gasX && ny === gasY) {
-      // Nudge sideways
-      if (probe.x !== gasX) nx = probe.x;
-      else ny = probe.y + (Math.random() > 0.5 ? 1 : -1);
-    }
-
-    // Clamp
-    nx = Math.max(0, Math.min(size - 1, nx));
-    ny = Math.max(0, Math.min(size - 1, ny));
-
-    probe.x = nx;
-    probe.y = ny;
-
-    toKeep.push(probe);
-  }
-
-  game.deployedProbes = toKeep;
 }
 
 // processFactorySynthesis is fully in server/production.js
@@ -1405,6 +1409,9 @@ function createDeployedMiner(game, teamName, targetX, targetY, targetObject = nu
   const tx = Math.max(0, Math.min(size-1, Math.floor(targetX)));
   const ty = Math.max(0, Math.min(size-1, Math.floor(targetY)));
 
+  const moon = factories.resolveMoonRef(game, tx, ty, targetObject);
+  const resolvedTarget = targetObject || (moon ? (moon.id || moon.name) : null);
+
   // Prevent targeting the gas giant itself
   const gas = game.map && game.map.gasGiant;
   if (gas && tx === gas.x && ty === gas.y) {
@@ -1430,7 +1437,7 @@ function createDeployedMiner(game, teamName, targetX, targetY, targetObject = nu
     state: 'moving',
     targetX: tx,
     targetY: ty,
-    targetObject: targetObject || null, // name/id of the anomaly/moon if object-targeted
+    targetObject: resolvedTarget, // moon id/name when targeting an orbiting body
     setupCompleteTime: null,
     miningSite: null
   };
@@ -1647,7 +1654,7 @@ io.on('connection', (socket) => {
   });
 
   // Player joins an existing game + team (role auto-assigned)
-  socket.on('joinGame', ({ code, teamName, playerName }, cb) => {
+  socket.on('joinGame', ({ code, teamName, playerName, preferredRole }, cb) => {
     const game = games.get(code);
     if (!game) return cb({ ok: false, error: 'Invalid code' });
     if (game.status === 'ended') return cb({ ok: false, error: 'Game already ended' });
@@ -1659,7 +1666,8 @@ io.on('connection', (socket) => {
     if (!tName || !pName) return cb({ ok: false, error: 'Team name and player name required' });
 
     try {
-      const result = game.addPlayerToTeam(tName, pName, socket.id);
+      const roleHint = preferredRole && ROLE_ORDER.includes(preferredRole) ? preferredRole : null;
+      const result = game.addPlayerToTeam(tName, pName, socket.id, roleHint);
       socket.join(code);
 
       const roleLabel = ROLE_LABELS[result.player.role];
@@ -1765,9 +1773,8 @@ io.on('connection', (socket) => {
     const team = game.getTeamByName(info.teamName);
     if (!team || team.factoryHP <= 0) return cb?.({ ok: false });
 
-    // Allow new infrastructure types (factory, admiral, capitol)
     if (type !== 'frigate' && type !== 'destroyer' && type !== 'miner' && type !== 'probe' &&
-        type !== 'factory' && type !== 'admiral' && type !== 'capitol') {
+        type !== 'factory' && type !== 'admiral' && type !== 'capitol' && type !== 'drone_wing') {
       return cb?.({ ok: false, error: 'Invalid production type' });
     }
 
@@ -1842,11 +1849,11 @@ io.on('connection', (socket) => {
     cb?.({ ok: true });
   });
 
-  // MINING: Move/redirect an existing deployed miner (Phase 1, callable by Builder or War for v1)
+  // MINING: Move/redirect an existing deployed miner (Builder only)
   socket.on('moveMiner', ({ minerId, targetX, targetY, targetObject }, cb) => {
     const info = socketToPlayer.get(socket.id);
-    if (!info || (info.role !== 'builder' && info.role !== 'war')) {
-      return cb?.({ ok: false, error: 'Builder or War Commander can command miners' });
+    if (!info || info.role !== 'builder') {
+      return cb?.({ ok: false, error: 'Only the Builder can command mining rigs' });
     }
 
     const game = info.game;
@@ -1872,7 +1879,10 @@ io.on('connection', (socket) => {
 
     miner.targetX = tx;
     miner.targetY = ty;
-    if (targetObject) miner.targetObject = targetObject;
+    const moon = factories.resolveMoonRef(game, tx, ty, targetObject);
+    if (moon) miner.targetObject = moon.id || moon.name;
+    else if (targetObject) miner.targetObject = targetObject;
+    else miner.targetObject = null;
 
     game.addEvent(`[${info.teamName}] Miner re-tasked to (${miner.targetX},${miner.targetY})`);
     debugLog(game, `MOVE MINER: team=${info.teamName} id=${minerId} newTarget=(${tx},${ty}) targetObject=${targetObject || 'none'}`);
@@ -1913,78 +1923,110 @@ io.on('connection', (socket) => {
     cb?.({ ok: true });
   });
 
-  // Launch probe — War Commander deploys a short-lived fast-moving reconnaissance unit.
-  // The probe travels quickly to the chosen location, takes a small snapshot (≤5 cells),
-  // reveals anomalies for the team, and then disappears.
-  socket.on('launchProbe', ({ x, y }, cb) => {
+  socket.on('commissionFleet', ({ admiralId, frigates, destroyers }, cb) => {
     const info = socketToPlayer.get(socket.id);
-    if (!info || info.role !== 'war') return cb?.({ ok: false, error: 'Only the War Commander can launch probes' });
+    if (!info || info.role !== 'war') {
+      return cb?.({ ok: false, error: 'Only the War Commander can commission fleets' });
+    }
 
     const game = info.game;
     if (game.status !== 'running') return cb?.({ ok: false });
 
-    const team = game.getTeamByName(info.teamName);
-    if (!team || (team.probes || 0) < 1) return cb?.({ ok: false, error: 'No probes available (build more)' });
+    const res = mapFleets.commissionFleet(game, info.teamName, admiralId, frigates, destroyers);
+    if (!res.ok) return cb?.(res);
 
-    if (!game.map || !game.map.starts || !game.map.anomalies) return cb?.({ ok: false, error: 'No map' });
+    persistGameState(game);
+    broadcastState(game);
+    cb?.({ ok: true, fleet: mapFleets.serializeDeployedFleetForClient(res.fleet) });
+  });
 
-    // Consume one ready probe
-    team.probes--;
+  socket.on('moveFleet', ({ fleetId, targetX, targetY }, cb) => {
+    const info = socketToPlayer.get(socket.id);
+    if (!info || info.role !== 'war') {
+      return cb?.({ ok: false, error: 'Only the War Commander can order fleets' });
+    }
 
-    const start = game.map.starts[info.teamName] || { x: 1, y: 1 };
-    const tx = Math.max(0, Math.min((game.mapSize || 13) - 1, Math.floor(x)));
-    const ty = Math.max(0, Math.min((game.mapSize || 13) - 1, Math.floor(y)));
+    const game = info.game;
+    if (game.status !== 'running') return cb?.({ ok: false });
 
-    // Create a mobile probe entity (quick travel, small snapshot on arrival)
-    const probe = {
-      id: 'probe-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7),
-      teamName: info.teamName,
-      x: start.x,
-      y: start.y,
-      targetX: tx,
-      targetY: ty,
-      state: 'moving',
-      launchTime: Date.now()
-    };
-
-    game.deployedProbes.push(probe);
-
-    game.addEvent(`[${info.teamName}] Probe launched toward (${tx},${ty}) — en route (scan begins on arrival)`);
-    debugLog(game, `PROBE LAUNCH: team=${info.teamName} from=(${start.x},${start.y}) target=(${tx},${ty})`);
+    const res = mapFleets.orderFleetMove(game, info.teamName, fleetId, targetX, targetY);
+    if (!res.ok) return cb?.(res);
 
     persistGameState(game);
     broadcastState(game);
     cb?.({ ok: true });
   });
 
-  // War Commander-only action
-  socket.on('launchAttack', ({ targetTeam, numFighters }, cb) => {
+  socket.on('deployDroneWing', ({ x, y }, cb) => {
     const info = socketToPlayer.get(socket.id);
-    if (!info || info.role !== 'war') return cb?.({ ok: false, error: 'Only the War Commander can launch attacks' });
+    if (!info || info.role !== 'war') {
+      return cb?.({ ok: false, error: 'Only the War Commander can deploy drone wings' });
+    }
 
     const game = info.game;
     if (game.status !== 'running') return cb?.({ ok: false });
 
-    const attacker = game.getTeamByName(info.teamName);
-    const defender = game.getTeamByName(targetTeam);
+    const res = droneWings.deployDroneWing(game, info.teamName, x, y);
+    if (!res.ok) return cb?.(res);
 
-    if (!attacker || !defender) return cb?.({ ok: false });
-    if (info.teamName === targetTeam) return cb?.({ ok: false });
-    if (attacker.factoryHP <= 0 || defender.factoryHP <= 0) return cb?.({ ok: false });
-    if (numFighters < 1 || numFighters > attacker.frigates) return cb?.({ ok: false });
+    debugLog(game, `DRONE WING DEPLOY: team=${info.teamName} target=(${x},${y})`);
+    persistGameState(game);
+    broadcastState(game);
+    cb?.({ ok: true, wing: droneWings.serializeDroneWingForClient(res.wing) });
+  });
 
-    attacker.frigates -= numFighters;
+  socket.on('moveDroneWing', ({ wingId, targetX, targetY }, cb) => {
+    const info = socketToPlayer.get(socket.id);
+    if (!info || info.role !== 'war') {
+      return cb?.({ ok: false, error: 'Only the War Commander can order drone wings' });
+    }
 
-    const arrivalTime = Date.now() + (TRAVEL_TIME * 1000);
-    game.fleets.push({
-      id: Date.now() + Math.random(),
-      from: info.teamName,
-      to: targetTeam,
-      frigates: numFighters,
-      arrivalTime
-    });
+    const game = info.game;
+    if (game.status !== 'running') return cb?.({ ok: false });
 
-    game.addEvent(`[${info.teamName}] War Commander launched ${numFighters} FTR at ${targetTeam} (ETA ${TRAVEL_TIME}s)`);
+    const res = droneWings.orderDroneWingMove(game, info.teamName, wingId, targetX, targetY);
+    if (!res.ok) return cb?.(res);
+
+    persistGameState(game);
+    broadcastState(game);
+    cb?.({ ok: true });
+  });
+
+  socket.on('setPeaceWith', ({ targetTeam, atPeace }, cb) => {
+    const info = socketToPlayer.get(socket.id);
+    if (!info || info.role !== 'war') {
+      return cb?.({ ok: false, error: 'Only the War Commander can set peace flags' });
+    }
+
+    const game = info.game;
+    if (game.status !== 'running') return cb?.({ ok: false });
+
+    const res = mapFleets.setPeaceWith(game, info.teamName, targetTeam, !!atPeace);
+    if (!res.ok) return cb?.(res);
+
+    persistGameState(game);
+    broadcastState(game);
+    cb?.({ ok: true });
+  });
+
+  // Launch probe — shared team stock; launcher role sets survey vs tactical mode.
+  socket.on('launchProbe', ({ x, y }, cb) => {
+    const info = socketToPlayer.get(socket.id);
+    if (!info || (info.role !== 'war' && info.role !== 'builder')) {
+      return cb?.({ ok: false, error: 'Only Builder or War Commander can launch probes' });
+    }
+
+    const game = info.game;
+    if (game.status !== 'running') return cb?.({ ok: false });
+
+    const result = probes.launchProbe(game, info.teamName, info.role, x, y);
+    if (!result.ok) return cb?.(result);
+
+    debugLog(game,
+      `PROBE LAUNCH: team=${info.teamName} role=${info.role} mode=${result.probe.mode} ` +
+      `from=(${result.start.x},${result.start.y}) target=(${result.tx},${result.ty})`
+    );
+
     persistGameState(game);
     broadcastState(game);
     cb?.({ ok: true });
