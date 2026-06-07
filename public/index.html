@@ -104,6 +104,21 @@
   }
   .team-card.dead { border-color: #440000; color: #664444; opacity: 0.7; }
   .team-name { font-weight: bold; font-size: 13px; }
+  .map-cell.team-start-cell {
+    box-shadow: inset 0 0 0 2px #ffcc33;
+    background: #1a2200 !important;
+    position: relative;
+  }
+  .map-cell.team-start-cell .start-badge {
+    position: absolute;
+    top: 0;
+    left: 1px;
+    font-size: 7px;
+    line-height: 1;
+    color: #ffcc33;
+    text-shadow: 0 0 2px #000;
+    pointer-events: none;
+  }
   .btn {
     background: #000; color: var(--green);
     border: 1px solid var(--green);
@@ -484,11 +499,11 @@
               <div style="margin-top:3px;">
                 <button class="btn" onclick="startProbeCommandFromWar()" 
                         style="border-color:#66ccff; color:#66ccff; font-size:13px; padding:5px 12px; width:100%;">
-                  LAUNCH PROBE (fast move + snapshot)
+                  LAUNCH PROBE (slow travel + 30s scan)
                 </button>
               </div>
               <div style="font-size:8px; color:#006633; margin-top:2px;">
-                Click button → go to Map → click target cell → confirm. Build more via Builder.
+                Click button → Map → target cell. Probe travels ~8s/cell, then scans 30s before intel returns. Build more via Builder.
               </div>
             </div>
 
@@ -626,6 +641,13 @@
             </div>
           </div>
 
+          <!-- Live infrastructure: deployed mining rigs + factory production/synthesis -->
+          <div class="panel" style="margin:0 0 6px 0; padding:6px 8px; border-color:#003344;">
+            <div class="panel-title" style="margin-bottom:4px;">INFRASTRUCTURE STATUS</div>
+            <div id="builder-build-warning" style="font-size:10px; color:#ffaa66; min-height:0;"></div>
+            <div id="builder-infrastructure-status" style="font-size:11px; line-height:1.4; min-height:48px;"></div>
+          </div>
+
           <!-- MINING: Available (undeployed) Miners count (Phase 0) — prominent for Builder -->
           <div class="panel" style="margin:0 0 6px 0; padding:6px 8px; background:#0a2200; border-color:#004422;">
             <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -668,7 +690,7 @@
               
               <!-- Probe production -->
               <button class="btn btn-small" onclick="queueBuild('probe')" title="Costs: 1 Fused Xenon, 1 Helium-3 Lattice, 1 Quantite, 0 Plasma-Bound Carbon, 0 Antimatter Catalyst, 0 Neurocryst" style="margin-bottom:3px;">
-                + PROBE (fast reconnaissance — reveals hidden anomalies)
+                + PROBE (fast reconnaissance — reveals sites + mineable resources)
               </button><br>
               
               <!-- Factory Kit -->
@@ -688,11 +710,6 @@
             </div>
 
             <div style="font-size:9px; color:#666; margin-top:6px;">(Open browser console (F12) to see [BUILDER] logs on click)</div>
-          </div>
-
-          <div class="panel" style="margin:0; padding:6px 8px;">
-            <div class="panel-title">PRODUCTION QUEUES (one per operational factory)</div>
-            <div id="build-status" style="min-height:42px; font-size:12px;"></div>
           </div>
 
           <!-- Easy access to map for deployment and viewing -->
@@ -721,7 +738,7 @@
             If the map is blank, check the browser console (F12) for errors.
           </div>
           <div style="font-size:10px; color:#006633; margin-top:6px; text-align:center;">
-            Moons: ◉ Large • ○ Small. ☁ Gas • ◆ Asteroid. Miners=M. ✧ = Active Probe (fast, temporary snapshot).
+            ★ = Your team start (gold border). Moons: ◉ Large • ○ Small. ☁ Gas • ◆ Asteroid. Miners=M. ✧ = Probe en route. ◎ = Probe scanning (30s).
           </div>
 
           <!-- Popup for cell details (delayed rich hover) -->
@@ -964,7 +981,7 @@ function queueBuild(type) {
 
       if (myMiners.length === 0) {
         // Non-blocking warning
-        const note = el('deploy-miner-status') || el('build-status');
+        const note = el('deploy-miner-status') || el('builder-build-warning');
         if (note) {
           note.textContent = '⚠️ No active mining rigs — building this may drain resources.';
           setTimeout(() => { if (note) note.textContent = ''; }, 4000);
@@ -1285,6 +1302,11 @@ function render(state) {
   // Builder — render all 6 resources with full names (acronyms reserved for future map pop-ups)
   renderResourceBalances(myTeamData);
 
+  // Builder — live mining rig + factory production/synthesis status
+  if (typeof renderBuilderInfrastructure === 'function') {
+    renderBuilderInfrastructure(state, myTeamData);
+  }
+
   // MINING: show availableMiners in Builder panel (Phase 0)
   const minerCountEl = el('builder-available-miners');
   if (minerCountEl) {
@@ -1303,9 +1325,6 @@ function render(state) {
 
   // Fleets
   renderFleets(state.fleets);
-
-  // Build queue (per my team)
-  renderBuildQueue(state, state.myTeam);
 
   // Map (dynamic, supports 13/15/17)
   renderMap(state);
@@ -1786,7 +1805,7 @@ function renderMap(state) {
   try {
     const size = state.mapSize || 13;
     const mapData = state.map || {};
-    const myStart = state.myStart || null;
+    const myStart = (typeof resolveMyStart === 'function') ? resolveMyStart(state) : (state.myStart || null);
 
   // Update header
   const sizeDisplay = el('map-size-display');
@@ -1854,7 +1873,7 @@ function renderMap(state) {
       cell.style.cssText = `width:100%; aspect-ratio:1; border:1px solid #003322; display:flex; align-items:center; justify-content:center; font-size:14px;`;
 
       const isGasGiant = (col === gasGiant.x && row === gasGiant.y);
-      const isMyStart = myStart && col === myStart.x && row === myStart.y;
+      const isMyStart = myStart && col === Number(myStart.x) && row === Number(myStart.y);
 
       if (isGasGiant) {
         cell.classList.add('gas-giant');
@@ -1862,17 +1881,12 @@ function renderMap(state) {
         cell.style.color = 'var(--amber)';
         cell.style.fontSize = '18px';
         cell.style.textShadow = '0 0 4px #ffcc33';
-      } else if (isMyStart) {
-        cell.textContent = '★';
-        cell.style.color = '#ffcc33';
-        cell.style.fontSize = '16px';
-        cell.style.background = '#112200';
       }
 
       // MINING: draw anomaly symbols if present at cell (Phase 2). Priority over basic moons.
       const cellKeyForAnom = `${col},${row}`;
       const anom = anomalyAt[cellKeyForAnom];
-      if (anom && !isGasGiant && !isMyStart) {
+      if (anom && !isGasGiant) {
         if (anom.type === 'large_moon' || anom.type === 'major_moon') {
           // Large / major moons — bigger visual + movement indicator
           cell.textContent = '◉';
@@ -1880,7 +1894,13 @@ function renderMap(state) {
           cell.style.fontSize = '15px';
           cell.style.background = '#0a2200';
           const moveNote = anom.orbitRadius ? ' (orbiting)' : '';
-          cell.title = (anom.name || 'Large Moon') + moveNote;
+          let tip = (anom.name || 'Large Moon') + moveNote;
+          if (myTeamForDisc && typeof isAnomalyDiscoveredByTeam === 'function' && isAnomalyDiscoveredByTeam(anom, myTeamForDisc)) {
+            tip += ' — Mine/min: ' + formatMiningRatesForAnomaly(anom, 1);
+          } else {
+            tip += ' — probe to reveal resources';
+          }
+          cell.title = tip;
         } else if (anom.type === 'small_moon' || anom.type === 'normal_moon') {
           // Small / normal moons — smaller visual, faster on average
           cell.textContent = '○';
@@ -1888,19 +1908,37 @@ function renderMap(state) {
           cell.style.fontSize = '11px';
           cell.style.background = '#061a0a';
           const moveNote = anom.orbitRadius ? ' (orbiting)' : '';
-          cell.title = (anom.name || 'Small Moon') + moveNote;
+          let tip = (anom.name || 'Small Moon') + moveNote;
+          if (myTeamForDisc && typeof isAnomalyDiscoveredByTeam === 'function' && isAnomalyDiscoveredByTeam(anom, myTeamForDisc)) {
+            tip += ' — Mine/min: ' + formatMiningRatesForAnomaly(anom, 1);
+          } else {
+            tip += ' — probe to reveal resources';
+          }
+          cell.title = tip;
         } else if (anom.type === 'gas_cloud') {
           cell.textContent = '☁';
           cell.style.color = '#66ccff';
           cell.style.fontSize = '13px';
           cell.style.background = '#001122';
-          cell.title = (anom.name || 'Gas Cloud') + ' (medium yields — may need probe)';
+          let tip = (anom.name || 'Gas Cloud');
+          if (myTeamForDisc && typeof isAnomalyDiscoveredByTeam === 'function' && isAnomalyDiscoveredByTeam(anom, myTeamForDisc)) {
+            tip += ' — Mine/min: ' + formatMiningRatesForAnomaly(anom, 1);
+          } else {
+            tip += ' (probe to reveal resources)';
+          }
+          cell.title = tip;
         } else if (anom.type === 'asteroid_cluster') {
           cell.textContent = '◆';
           cell.style.color = '#ffaa66';
           cell.style.fontSize = '12px';
           cell.style.background = '#221100';
-          cell.title = (anom.name || 'Asteroid Cluster') + ' (rare yields — may need probe)';
+          let tip = (anom.name || 'Asteroid Cluster');
+          if (myTeamForDisc && typeof isAnomalyDiscoveredByTeam === 'function' && isAnomalyDiscoveredByTeam(anom, myTeamForDisc)) {
+            tip += ' — Mine/min: ' + formatMiningRatesForAnomaly(anom, 1);
+          } else {
+            tip += ' (probe to reveal resources)';
+          }
+          cell.title = tip;
         }
       }
 
@@ -1920,16 +1958,45 @@ function renderMap(state) {
         cell.title = cnt + ' miner(s) here — ' + states;
       }
 
-      // PROBES: draw active own probes (temporary, fast-moving)
+      // PROBES: draw active own probes (moving or scanning at destination)
       const probeKey = `${col},${row}`;
       if (probeAt[probeKey]) {
         const p = probeAt[probeKey];
-        cell.textContent = '✧';
-        cell.style.color = '#66ccff';
-        cell.style.fontSize = '13px';
-        cell.style.background = '#001133';
-        cell.style.textShadow = '0 0 3px #66ccff';
-        cell.title = `Active probe (en route to snapshot)`;
+        if (p.state === 'scanning') {
+          cell.textContent = '◎';
+          cell.style.color = '#ffdd66';
+          cell.style.fontSize = '13px';
+          cell.style.background = '#221a00';
+          cell.style.textShadow = '0 0 4px #ffcc33';
+          const remain = p.scanRemaining != null ? `${p.scanRemaining}s` : '…';
+          cell.title = `Probe scanning area — results in ${remain}`;
+        } else {
+          cell.textContent = '✧';
+          cell.style.color = '#66ccff';
+          cell.style.fontSize = '13px';
+          cell.style.background = '#001133';
+          cell.style.textShadow = '0 0 3px #66ccff';
+          cell.title = `Probe en route (1 cell ~8s)`;
+        }
+      }
+
+      // Always mark team starting cell (gold border + corner ★, even with miners/probes on cell)
+      if (isMyStart && !isGasGiant) {
+        cell.classList.add('team-start-cell');
+        const hasSymbol = cell.textContent && cell.textContent.trim().length > 0;
+        if (!hasSymbol) {
+          const center = document.createElement('span');
+          center.textContent = '★';
+          center.style.color = '#ffcc33';
+          center.style.fontSize = '14px';
+          cell.appendChild(center);
+        }
+        const badge = document.createElement('span');
+        badge.className = 'start-badge';
+        badge.textContent = '★';
+        cell.appendChild(badge);
+        const startNote = '★ Your team starting position';
+        cell.title = cell.title ? `${startNote} | ${cell.title}` : startNote;
       }
 
       // Command mode (from popup buttons or War/Builder panels) shows crosshair
@@ -2047,7 +2114,25 @@ function buildCellInfo(state, col, row) {
     const typeLabel = anomHere.type === 'large_moon' ? 'Large Moon' :
                       anomHere.type === 'small_moon' ? 'Small Moon' :
                       anomHere.type.replace('_', ' ');
-    html += `<div class="section"><span class="object-name">${name}</span>${extra}<br><span style="color:#88aa99;">${typeLabel}</span></div>`;
+    html += `<div class="section"><span class="object-name">${name}</span>${extra}<br><span style="color:#88aa99;">${typeLabel}</span>`;
+
+    if (myTeam && typeof isAnomalyDiscoveredByTeam === 'function' && isAnomalyDiscoveredByTeam(anomHere, myTeam)) {
+      const rigsHere = typeof countActiveMinersAtSite === 'function'
+        ? countActiveMinersAtSite(state.deployedMiners, col, row, myTeam)
+        : 0;
+      const mineLine = typeof formatMiningRatesForAnomaly === 'function'
+        ? formatMiningRatesForAnomaly(anomHere, Math.max(1, rigsHere))
+        : '';
+      html += `<br><span style="color:#66ccaa; font-size:9px;">Mine/min (1 rig): <strong>${mineLine}</strong></span>`;
+      if (rigsHere > 1) {
+        const stacked = formatMiningRatesForAnomaly(anomHere, rigsHere);
+        html += `<br><span style="color:#448866; font-size:8px;">Current stack (${rigsHere} rigs): ${stacked}</span>`;
+      }
+    } else if (myTeam) {
+      html += `<br><span style="color:#335544; font-size:9px;">⛯ Resources unknown — probe this site to reveal yields</span>`;
+    }
+
+    html += `</div>`;
   }
 
   // Own miners at this cell (permanent for the team)
@@ -2074,7 +2159,8 @@ function buildCellInfo(state, col, row) {
   }
 
   // Starting position marker
-  if (state.myStart && state.myStart.x === col && state.myStart.y === row) {
+  const myStartCell = (typeof resolveMyStart === 'function') ? resolveMyStart(state) : state.myStart;
+  if (myStartCell && myStartCell.x === col && myStartCell.y === row) {
     html += `<div class="section">★ Your team's starting position</div>`;
   }
 
@@ -2195,6 +2281,8 @@ console.log('%c[STAR POINT] Team-based client ready', 'color:#006633');
 <script src="/client/mining-deployment.js"></script>
 <script src="/client/command-system.js"></script>
 <script src="/client/production.js"></script>
+<script src="/client/mining-rates.js"></script>
+<script src="/client/builder-status.js"></script>
 
 </body>
 </html>

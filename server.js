@@ -5,6 +5,8 @@ const path = require('path');
 const os = require('os');
 const fs = require('fs');
 const db = require('./db');
+const production = require('./server/production');
+const probes = require('./server/probes');
 
 const app = express();
 const server = http.createServer(app);
@@ -108,7 +110,8 @@ const STACKING_MULTIPLIERS = [1.0, 0.75, 0.55]; // index 0=1rig, 1=2rigs, 2=3rig
 const PROBE_COST = [1, 1, 1, 0, 0, 1]; // cheap discovery unit
 const PROBE_TIME = 18;
 const PROBE_RADIUS = 2;                // legacy instant radius (being replaced)
-const PROBE_MOVE_TICKS = 2;            // probes move very quickly (every 2 ticks)
+const PROBE_MOVE_TICKS = 8;            // ~1 cell every 8s (see server/probes.js)
+const PROBE_SCAN_TICKS = 30;           // dwell at destination before intel returns
 const PROBE_SNAPSHOT_SIZE = 5;         // max cells in a snapshot (center + 4 directions = plus shape)
 
 // FACTORIES: slow but achievable deployment + setup
@@ -116,20 +119,6 @@ const PROBE_SNAPSHOT_SIZE = 5;         // max cells in a snapshot (center + 4 di
 const FACTORY_DEPLOY_SPEED_TICKS = 8;    // noticeably faster than before (was 15), but still deliberate
 const FACTORY_SETUP_TIME_MS = 180000;    // 3 minutes setup once arrived at moon (chosen over 2 min for weight)
 const MAX_FACTORIES_PER_MOON = 1;        // hard rule: only one factory per moon
-
-// Mineral Synthesis: passive resource generation from operational factories.
-// Provides a meaningful baseline income so teams can build multiple things early
-// and sustain production even before mining rigs are fully online.
-const FACTORY_SYNTHESIS_INTERVAL_TICKS = 60; // every 60 seconds (1 minute)
-const FACTORY_SYNTHESIS_PER_FACTORY = {
-  // Increased to support a healthier early/mid game alongside active mining
-  'Fused Xenon': 3,
-  'Helium-3 Lattice': 2,
-  'Quantite': 0,
-  'Plasma-Bound Carbon': 2,
-  'Antimatter Catalyst': 0,
-  'Neurocryst': 1
-};
 
 // Yield base (per rig per cycle, before stacking; integers for simplicity)
 const YIELD_BASE = {
@@ -149,11 +138,11 @@ const MAX_QUEUE = 4;
 // Increased to give teams enough starting resources to build several things early
 // (multiple miners + probes) before mining income really ramps up.
 const RESOURCE_BASE_RANGES = {
-  'Fused Xenon':         { min: 22, max: 32 },
-  'Helium-3 Lattice':    { min: 16, max: 24 },
-  'Quantite':            { min: 9,  max: 15 },
-  'Plasma-Bound Carbon': { min: 7,  max: 13 },
-  'Antimatter Catalyst': { min: 3,  max: 7  },
+  'Fused Xenon':         { min: 25, max: 35 },
+  'Helium-3 Lattice':    { min: 18, max: 26 },
+  'Quantite':            { min: 10, max: 16 },
+  'Plasma-Bound Carbon': { min: 8,  max: 14 },
+  'Antimatter Catalyst': { min: 4,  max: 8  },
   'Neurocryst':          { min: 2,  max: 5  }
 };
 
@@ -218,18 +207,25 @@ function generateStartingResources(teamIndex, totalTeams) {
     resources[mat] = Math.max(0, Math.round(val));
   }
 
-  // Guarantee: every team gets enough resources to bootstrap early game.
-  // We guarantee enough for at least TWO miners so the Builder can get production
-  // rolling even on bad rolls, while still preserving asymmetry for trading.
-  const MINER_COST = [6, 4, 2, 5, 0, 1]; // matches BUILD_COSTS.miner
-  const MINER_BOOTSTRAP_MULTIPLIER = 2;   // guarantee for 2 miners
+  // Strong guarantee for early game bootstrapping.
+  // Every team gets enough to build several miners + probes + start on infrastructure
+  // even before synthesis and mining kick in.
+  const MINER_COST = [6, 4, 2, 5, 0, 1];
+  const BOOTSTRAP_MULTIPLIER = 4;   // for 4 miners worth of base
 
   for (let i = 0; i < RESOURCE_ORDER.length; i++) {
     const mat = RESOURCE_ORDER[i];
-    const needed = MINER_COST[i] * MINER_BOOTSTRAP_MULTIPLIER;
+    const needed = MINER_COST[i] * BOOTSTRAP_MULTIPLIER;
     if ((resources[mat] || 0) < needed) {
       resources[mat] = needed;
     }
+  }
+
+  // Extra buffer specifically for expensive early infrastructure (Factory kits etc.)
+  const INFRA_BUFFER = [8, 5, 3, 5, 2, 2];
+  for (let i = 0; i < RESOURCE_ORDER.length; i++) {
+    const mat = RESOURCE_ORDER[i];
+    resources[mat] = (resources[mat] || 0) + INFRA_BUFFER[i];
   }
 
   return resources;
@@ -270,6 +266,9 @@ class Team {
     this.availableFactories = 0;  // factory kits ready to deploy to moons (1 per moon max)
     this.availableAdmirals = 0;   // produced at home Military Academy
     this.capitolShips = 0;        // command vessels for fleet formation
+
+    // Probe intel keyed by anomaly id (mirrors anomaly.discoveredBy for this team)
+    this.probeIntel = {};
   }
 
   getRolePlayer(role) {
@@ -552,10 +551,48 @@ function hydrateSavedGame(saved) {
       // Legacy moons array is no longer used (all moons are now in anomalies as large_moon/small_moon)
       anomalies: saved.mapData.anomalies || []
     };
+    // Rebuild per-team probe intel index from persisted anomaly discovery flags
+    for (const team of game.teams.values()) {
+      team.probeIntel = team.probeIntel || {};
+      for (const a of game.map.anomalies) {
+        if (a.discoveredBy?.[team.name] && a.id) team.probeIntel[a.id] = true;
+      }
+    }
     console.log(`[DB] Restored full map data for ${saved.code}`);
   } else if (game.status === 'running' || game.status === 'saved') {
     // Fallback: regenerate if we have no map data but game was active/saved
     generateMapForGame(game);
+  }
+
+  // Ensure home factories exist for restored games (the spatial factory system)
+  if (!game.factories || game.factories.length === 0) {
+    const starts = game.map && game.map.starts ? game.map.starts : {};
+    game.factories = [];
+    for (const [teamName, pos] of Object.entries(starts)) {
+      const homeFactoryId = 'factory-home-' + teamName + '-' + Date.now();
+      game.factories.push({
+        id: homeFactoryId,
+        teamName,
+        x: pos.x,
+        y: pos.y,
+        state: 'operational',
+        isHome: true,
+        setupCompleteTime: null
+      });
+    }
+    if (game.factories.length > 0) {
+      console.log(`[DB] Initialized home factories for restored game ${saved.code}`);
+    }
+  }
+
+  // Backfill map.starts from home factories if team_starts were missing from older saves
+  if (game.map) {
+    if (!game.map.starts) game.map.starts = {};
+    for (const f of game.factories || []) {
+      if (f.isHome && f.teamName && !game.map.starts[f.teamName]) {
+        game.map.starts[f.teamName] = { x: f.x, y: f.y };
+      }
+    }
   }
 
   return game;
@@ -578,7 +615,7 @@ setInterval(() => {
 
     game.tickCounter++;
 
-    processBuilds(game);
+    production.processBuilds(game);
     processFleets(game);
 
     // Moon orbits (slow movement)
@@ -590,10 +627,10 @@ setInterval(() => {
     processMinerMining(game);
 
     // PROBES: fast-moving short-lived reconnaissance units
-    processProbeMovement(game);
+    probes.processProbeMovement(game);
 
     // FACTORIES: slow mineral synthesis (baseline permanent resource flow)
-    processFactorySynthesis(game);
+    production.processFactorySynthesis(game);
 
     // Passive mining removed in this pass (new 6-resource economy + future mechanics)
     checkWinCondition(game);
@@ -603,6 +640,18 @@ setInterval(() => {
     persistGameState(game);
   }
 }, 1000);
+
+/** Resolve a team's starting cell from map data or home factory fallback. */
+function getTeamStart(game, teamName) {
+  if (!teamName) return null;
+  const fromMap = game.map?.starts?.[teamName];
+  if (fromMap && fromMap.x != null && fromMap.y != null) {
+    return { x: fromMap.x, y: fromMap.y };
+  }
+  const home = (game.factories || []).find(f => f.teamName === teamName && f.isHome);
+  if (home) return { x: home.x, y: home.y };
+  return null;
+}
 
 // Broadcast full state to all players + the host (pure host has no role)
 function broadcastState(game) {
@@ -674,15 +723,22 @@ function broadcastState(game) {
     eventLog: [...game.eventLog],
     winner: game.winner,
     // MINING: deployedMiners broadcast (Phase 1) — client filters for own team mostly
-    deployedMiners: game.deployedMiners ? game.deployedMiners.map(m => ({
-      id: m.id,
-      teamName: m.teamName,
-      x: m.x,
-      y: m.y,
-      state: m.state,
-      targetX: m.targetX,
-      targetY: m.targetY
-    })) : [],
+    deployedMiners: game.deployedMiners ? game.deployedMiners.map(m => {
+      const payload = {
+        id: m.id,
+        teamName: m.teamName,
+        x: m.x,
+        y: m.y,
+        state: m.state,
+        targetX: m.targetX,
+        targetY: m.targetY,
+        targetObject: m.targetObject || null
+      };
+      if (m.state === 'setting_up' && m.setupCompleteTime) {
+        payload.setupRemaining = Math.max(0, Math.ceil((m.setupCompleteTime - Date.now()) / 1000));
+      }
+      return payload;
+    }) : [],
 
     // PROBES: short-lived mobile reconnaissance units (visible primarily to owning team)
     deployedProbes: game.deployedProbes ? game.deployedProbes.map(p => ({
@@ -692,18 +748,29 @@ function broadcastState(game) {
       y: p.y,
       targetX: p.targetX,
       targetY: p.targetY,
-      state: p.state
+      state: p.state,
+      scanRemaining: p.state === 'scanning' && p.scanCompleteTick
+        ? Math.max(0, p.scanCompleteTick - game.tickCounter)
+        : null
     })) : [],
 
     // FACTORIES: spatial (home base + deployed to moons, 1 per moon max)
-    factories: game.factories ? game.factories.map(f => ({
+    // Ensure home factories are always present in state sent to clients
+    factories: (game.factories && game.factories.length > 0) ? game.factories.map(f => ({
       id: f.id,
       teamName: f.teamName,
       x: f.x,
       y: f.y,
       state: f.state,
       isHome: !!f.isHome
-    })) : [],
+    })) : (game.map && game.map.starts ? Object.entries(game.map.starts).map(([teamName, pos]) => ({
+      id: 'factory-home-' + teamName,
+      teamName,
+      x: pos.x,
+      y: pos.y,
+      state: 'operational',
+      isHome: true
+    })) : []),
     // Map data (new)
     mapSize: game.mapSize,
     map: game.map ? {
@@ -726,9 +793,7 @@ function broadcastState(game) {
     };
 
     // Give this player their private starting location only
-    if (game.map && game.map.starts && info.teamName) {
-      payload.myStart = game.map.starts[info.teamName] || null;
-    }
+    payload.myStart = getTeamStart(game, info.teamName);
 
     io.to(socketId).emit('gameUpdate', payload);
   }
@@ -747,7 +812,13 @@ function broadcastState(game) {
   }
 }
 
+// Delegated to production.js
 function processBuilds(game) {
+  production.processBuilds(game);
+}
+
+// Old processBuilds body removed - see server/production.js
+function _old_processBuilds_removed(game) {
   for (const team of game.teams.values()) {
     if (team.factoryHP <= 0) continue;
 
@@ -1268,42 +1339,8 @@ function processProbeMovement(game) {
   game.deployedProbes = toKeep;
 }
 
-// === Mineral Synthesis from Factories ===
-// Slow passive trickle of resources from every operational factory.
-// This provides a baseline "permanent flow" so teams don't completely starve
-// if they under-invest in mining rigs early on. Synthesis is much slower
-// than actual mining but is reliable and scales with number of factories.
-function processFactorySynthesis(game) {
-  if (!game.factories || game.factories.length === 0) return;
-
-  // Only run on the configured interval
-  if (game.tickCounter % FACTORY_SYNTHESIS_INTERVAL_TICKS !== 0) return;
-
-  const operationalFactoriesByTeam = {};
-
-  for (const f of game.factories) {
-    if (f.state !== 'operational') continue;
-    operationalFactoriesByTeam[f.teamName] = (operationalFactoriesByTeam[f.teamName] || 0) + 1;
-  }
-
-  for (const [teamName, count] of Object.entries(operationalFactoriesByTeam)) {
-    const team = game.getTeamByName(teamName);
-    if (!team || team.factoryHP <= 0) continue;
-
-    const gains = [];
-    for (const [resource, amountPerFactory] of Object.entries(FACTORY_SYNTHESIS_PER_FACTORY)) {
-      const total = amountPerFactory * count;
-      if (total > 0) {
-        team.resources[resource] = (team.resources[resource] || 0) + total;
-        gains.push(`+${total} ${resource}`);
-      }
-    }
-
-    if (gains.length > 0 && game.tickCounter % (FACTORY_SYNTHESIS_INTERVAL_TICKS * 3) === 0) {
-      debugLog(game, `SYNTHESIS: team=${teamName} (${count} factories) → ${gains.join(', ')}`);
-    }
-  }
-}
+// processFactorySynthesis is fully in server/production.js
+// (called via production.processFactorySynthesis(game) in the main loop)
 
 // MINING helper: add yield resources to team (tunable distribution) + detailed event log
 function addMiningYieldToTeam(game, team, anomalyType, amount, siteKey = '') {
@@ -1683,6 +1720,22 @@ io.on('connection', (socket) => {
     }
 
     game.addEvent('GAME STARTED — Each team has different starting resources (specialization bias hidden). Builder: you have enough to start building multiple miners immediately.');
+
+    // Give an immediate synthesis "head start" so Builders have resources to build several things right away
+    // (home factory baseline for 3 minutes of synthesis)
+    for (const t of game.teams.values()) {
+      if (t.factoryHP > 0) {
+        const synth = production.FACTORY_SYNTHESIS_PER_FACTORY || {};
+        const homeFactories = 1; // at least the starting one
+        for (const [res, perMin] of Object.entries(synth)) {
+          const boost = Math.round(perMin * homeFactories * 3); // 3 minutes worth
+          if (boost > 0) {
+            t.resources[res] = (t.resources[res] || 0) + boost;
+          }
+        }
+      }
+    }
+
     persistGameState(game);
     broadcastState(game);
     cb?.({ ok: true });
@@ -1733,6 +1786,37 @@ io.on('connection', (socket) => {
 
     const factoryLabel = targetQueue.factoryId === 'home' ? 'Home Base' : 'Forward Factory';
     game.addEvent(`[${info.teamName}] Builder queued 1 ${type.toUpperCase()} at ${factoryLabel}`);
+
+    persistGameState(game);
+    broadcastState(game);
+    cb?.({ ok: true });
+  });
+
+  // Builder can cancel items still sitting in a production queue (not the one currently building)
+  socket.on('cancelQueuedBuild', ({ queueIndex, position }, cb) => {
+    const info = socketToPlayer.get(socket.id);
+    if (!info || info.role !== 'builder') return cb?.({ ok: false, error: 'Only the Builder can manage the production queue' });
+
+    const game = info.game;
+    if (game.status !== 'running') return cb?.({ ok: false });
+
+    const team = game.getTeamByName(info.teamName);
+    if (!team) return cb?.({ ok: false, error: 'Team not found' });
+
+    const q = team.buildQueues && team.buildQueues[queueIndex];
+    if (!q || !Array.isArray(q.queue)) {
+      return cb?.({ ok: false, error: 'Invalid queue' });
+    }
+
+    if (position < 0 || position >= q.queue.length) {
+      return cb?.({ ok: false, error: 'Invalid position in queue' });
+    }
+
+    const removedType = q.queue.splice(position, 1)[0];
+
+    // Note: We do NOT refund resources. The cost was paid when queued.
+    game.addEvent(`[${info.teamName}] Builder canceled queued ${removedType.toUpperCase()}`);
+    debugLog(game, `CANCEL BUILD: team=${info.teamName} queue=${queueIndex} pos=${position} type=${removedType}`);
 
     persistGameState(game);
     broadcastState(game);
@@ -1831,7 +1915,7 @@ io.on('connection', (socket) => {
 
     game.deployedProbes.push(probe);
 
-    game.addEvent(`[${info.teamName}] Probe launched toward (${tx},${ty}) — traveling fast`);
+    game.addEvent(`[${info.teamName}] Probe launched toward (${tx},${ty}) — en route (scan begins on arrival)`);
     debugLog(game, `PROBE LAUNCH: team=${info.teamName} from=(${start.x},${start.y}) target=(${tx},${ty})`);
 
     persistGameState(game);

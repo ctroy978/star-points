@@ -84,7 +84,7 @@ function getDefaultInstructions(type) {
     return 'Click a map cell to send a miner rig there.';
   }
   if (type === 'probe') {
-    return 'Click a map cell to launch a fast-moving probe. It will travel quickly, take a small snapshot (5 cells), then disappear.';
+    return 'Click a map cell to launch a probe. It travels ~8s per cell, scans the area for 30s on arrival, then reveals hidden sites + resources for your team.';
   }
   return 'Click a destination on the map.';
 }
@@ -269,7 +269,7 @@ function startProbeCommandFromWar() {
 
   enterMapCommandMode('probe', {
     action: 'launch',
-    instructions: 'Click destination. Probe will move fast, snapshot ~5 cells on arrival, then vanish.'
+    instructions: 'Click destination. Probe travels slowly (~8s/cell), scans 30s on arrival, then reveals sites + yields for your team only.'
   });
 }
 
