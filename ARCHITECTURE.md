@@ -110,10 +110,18 @@ These rules are more important (and harder) than the raw pathfinding algorithm. 
 
 ## Recent Extraction Work (June 2026)
 
-As part of ongoing Builder UI improvements:
-- Created `public/client/mining-deployment.js`
-- Moved miner deployment (`deployMinerToCoords`), probe launch coordination, and shared target helpers out of the monolithic `index.html`.
-- Added direct "DIRECT MINER RIG" controls inside the Builder tab (coordinate inputs + deploy button + "Set as Map Target" for War Commander probe use).
-- Documented the future concern about mobile anomalies and the need for better targeting architecture (entity IDs vs raw coordinates) inside the new file.
+**Server modules:**
+- `server/production.js` — build queues, factory synthesis
+- `server/probes.js` — probe movement and scanning
 
-This is the first concrete application of the soft rule on a meaningful feature. Continue this pattern.
+**Client modules:**
+- `public/client/command-system.js` — map command mode (deploy miner, launch probe)
+- `public/client/production.js` — resource balances, build queue rendering
+- `public/client/builder-status.js` — Builder infrastructure panel
+- `public/client/mining-rates.js` — mining yield display helpers
+- `public/client/map.js` — grid rendering, cell popups, start markers, map overlays
+- `public/client/mining-deployment.js` — legacy deploy helpers
+
+`public/index.html` keeps HTML/CSS, tab shell, `render()` orchestration, and socket wiring.
+
+Continue this pattern for combat (`war.js`) and server map generation (`server/map.js`) when those areas next change significantly.
