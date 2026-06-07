@@ -7,6 +7,7 @@ const fs = require('fs');
 const db = require('./db');
 const production = require('./server/production');
 const probes = require('./server/probes');
+const factories = require('./server/factories');
 
 const app = express();
 const server = http.createServer(app);
@@ -421,6 +422,7 @@ function persistGameState(game) {
         // MINING: persist availableMiners + probes (Phase 0/6)
         availableMiners: team.availableMiners || 0,
         probes: team.probes || 0,
+        availableFactories: team.availableFactories || 0,
         deployedMiners: teamMiners,
         buildQueues: team.buildQueues || []
       });
@@ -448,6 +450,10 @@ function persistGameState(game) {
     // Also ensure map_size is set even if no full map yet
     if (game.mapSize) {
       db.updateGameStatusAndMapSize(game.code, game.status, game.mapSize);
+    }
+
+    if (game.factories && game.factories.length > 0) {
+      db.saveGameFactories(game.code, game.factories);
     }
   } catch (e) {
     console.error('[DB] Persist error:', e.message);
@@ -564,6 +570,14 @@ function hydrateSavedGame(saved) {
     generateMapForGame(game);
   }
 
+  if (saved.factories && Array.isArray(saved.factories) && saved.factories.length > 0) {
+    game.factories = saved.factories.map(f => ({
+      ...f,
+      setupCompleteTime: f.state === 'setting_up' ? (Date.now() + factories.FACTORY_SETUP_TIME_MS) : null
+    }));
+    console.log(`[DB] Restored ${game.factories.length} factory record(s) for ${saved.code}`);
+  }
+
   // Ensure home factories exist for restored games (the spatial factory system)
   if (!game.factories || game.factories.length === 0) {
     const starts = game.map && game.map.starts ? game.map.starts : {};
@@ -625,6 +639,10 @@ setInterval(() => {
     processMinerMovement(game);
     processMinerSetup(game);
     processMinerMining(game);
+
+    // Forward factory kits: travel to moons, setup, then join build queue pool
+    factories.processFactoryMovement(game, debugLog);
+    factories.processFactorySetup(game, debugLog);
 
     // PROBES: fast-moving short-lived reconnaissance units
     probes.processProbeMovement(game);
@@ -756,14 +774,9 @@ function broadcastState(game) {
 
     // FACTORIES: spatial (home base + deployed to moons, 1 per moon max)
     // Ensure home factories are always present in state sent to clients
-    factories: (game.factories && game.factories.length > 0) ? game.factories.map(f => ({
-      id: f.id,
-      teamName: f.teamName,
-      x: f.x,
-      y: f.y,
-      state: f.state,
-      isHome: !!f.isHome
-    })) : (game.map && game.map.starts ? Object.entries(game.map.starts).map(([teamName, pos]) => ({
+    factories: (game.factories && game.factories.length > 0) ? game.factories.map(f =>
+      factories.serializeFactoryForClient(f, game)
+    ) : (game.map && game.map.starts ? Object.entries(game.map.starts).map(([teamName, pos]) => ({
       id: 'factory-home-' + teamName,
       teamName,
       x: pos.x,
@@ -1763,18 +1776,7 @@ io.on('connection', (socket) => {
       return cb?.({ ok: false, error: 'Not enough resources' });
     }
 
-    // NEW: Multi-queue system — one queue per operational factory.
-    // For now, append to the first queue that has room (max 4 per queue).
-    // Future: UI will let Builder choose which factory/queue to use.
-    const MAX_QUEUE_PER_FACTORY = 4;
-
-    let targetQueue = null;
-    for (const q of team.buildQueues) {
-      if (q.queue.length < MAX_QUEUE_PER_FACTORY) {
-        targetQueue = q;
-        break;
-      }
-    }
+    const targetQueue = factories.findShortestBuildQueue(team, game);
 
     if (!targetQueue) {
       return cb?.({ ok: false, error: 'All factory queues are full (max 4 per factory)' });
@@ -1784,7 +1786,7 @@ io.on('connection', (socket) => {
     team.deduct(cost);
     targetQueue.queue.push(type);
 
-    const factoryLabel = targetQueue.factoryId === 'home' ? 'Home Base' : 'Forward Factory';
+    const factoryLabel = factories.factoryLabelForQueue(game, info.teamName, targetQueue.factoryId);
     game.addEvent(`[${info.teamName}] Builder queued 1 ${type.toUpperCase()} at ${factoryLabel}`);
 
     persistGameState(game);
@@ -1874,6 +1876,38 @@ io.on('connection', (socket) => {
 
     game.addEvent(`[${info.teamName}] Miner re-tasked to (${miner.targetX},${miner.targetY})`);
     debugLog(game, `MOVE MINER: team=${info.teamName} id=${minerId} newTarget=(${tx},${ty}) targetObject=${targetObject || 'none'}`);
+    persistGameState(game);
+    broadcastState(game);
+    cb?.({ ok: true });
+  });
+
+  socket.on('deployFactory', ({ targetX, targetY, targetObject }, cb) => {
+    const info = socketToPlayer.get(socket.id);
+    if (!info || info.role !== 'builder') return cb?.({ ok: false, error: 'Only the Builder can deploy factories' });
+
+    const game = info.game;
+    if (game.status !== 'running') return cb?.({ ok: false });
+
+    const res = factories.createDeployedFactory(game, info.teamName, targetX, targetY, targetObject);
+    if (!res.ok) return cb?.(res);
+
+    persistGameState(game);
+    broadcastState(game);
+    cb?.({ ok: true });
+  });
+
+  socket.on('moveFactory', ({ factoryId, targetX, targetY, targetObject }, cb) => {
+    const info = socketToPlayer.get(socket.id);
+    if (!info || info.role !== 'builder') {
+      return cb?.({ ok: false, error: 'Only the Builder can redirect factory kits' });
+    }
+
+    const game = info.game;
+    if (game.status !== 'running') return cb?.({ ok: false });
+
+    const res = factories.moveFactory(game, info.teamName, factoryId, targetX, targetY, targetObject);
+    if (!res.ok) return cb?.(res);
+
     persistGameState(game);
     broadcastState(game);
     cb?.({ ok: true });

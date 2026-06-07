@@ -14,7 +14,7 @@
  * See ARCHITECTURE.md for current guidance on when to unify movement logic.
  */
 
-let commandMode = null; // { type: 'miner', action: 'deploy' | 'move' | 'auto', minerId?: string, instructions?: string }
+let commandMode = null; // { type, action, minerId?, factoryId?, instructions? }
 
 /**
  * Converts numeric grid coordinates (col, row) to human-friendly map notation.
@@ -37,6 +37,7 @@ function enterMapCommandMode(type, options = {}) {
     type: type || 'miner',
     action: options.action || 'auto',
     minerId: options.minerId || null,
+    factoryId: options.factoryId || null,
     instructions: options.instructions || getDefaultInstructions(type)
   };
 
@@ -82,6 +83,9 @@ function cancelCommandMode() {
 function getDefaultInstructions(type) {
   if (type === 'miner') {
     return 'Click a map cell to send a miner rig there.';
+  }
+  if (type === 'factory') {
+    return 'Click a moon (◉ large or ○ small) to deploy a factory kit.';
   }
   if (type === 'probe') {
     return 'Click a map cell to launch a probe. It travels ~8s per cell, scans the area for 30s on arrival, then reveals hidden sites + resources for your team.';
@@ -134,6 +138,17 @@ function hideCommandInstructions() {
   if (bar) bar.style.display = 'none';
 }
 
+function getMoonAtCell(state, col, row) {
+  const anomalies = state?.map?.anomalies || [];
+  const anom = anomalies.find(a => a.x === col && a.y === row);
+  if (!anom) return null;
+  if (anom.type === 'large_moon' || anom.type === 'small_moon' ||
+      anom.type === 'major_moon' || anom.type === 'normal_moon') {
+    return anom;
+  }
+  return null;
+}
+
 // Called from the map cell click handler (we will wire this in index.html patch)
 function handleMapCellCommandClick(col, row) {
   if (!commandMode) return false;
@@ -173,6 +188,28 @@ function handleMapCellCommandClick(col, row) {
       // (The server already has good logic.)
       socket.emit('deployMiner', { targetX: col, targetY: row }, (res) => {
         if (res && !res.ok && res.error) alert('Order failed: ' + res.error);
+        cancelCommandMode();
+      });
+    }
+  } else if (type === 'factory') {
+    const state = (typeof lastState !== 'undefined') ? lastState : null;
+    const moon = getMoonAtCell(state, col, row);
+    if (!moon) {
+      alert('Factories can only be deployed to moons (◉ large moon or ○ small moon).');
+      return true;
+    }
+
+    const targetObject = moon.id || moon.name || null;
+    const factoryId = commandMode.factoryId;
+
+    if (factoryId) {
+      socket.emit('moveFactory', { factoryId, targetX: col, targetY: row, targetObject }, (res) => {
+        if (res && !res.ok && res.error) alert('Factory redirect failed: ' + res.error);
+        cancelCommandMode();
+      });
+    } else {
+      socket.emit('deployFactory', { targetX: col, targetY: row, targetObject }, (res) => {
+        if (res && !res.ok && res.error) alert('Factory deploy failed: ' + res.error);
         cancelCommandMode();
       });
     }
@@ -273,6 +310,25 @@ function startProbeCommandFromWar() {
   });
 }
 
-// Make the entry points globally available
-// (startMinerCommandFromBuilder removed — miners are no longer directed from Builder UI)
+function deployAvailableFactory() {
+  const last = (typeof lastState !== 'undefined') ? lastState : null;
+  const myTeamName = last ? last.myTeam : null;
+  const myTeamData = myTeamName && last
+    ? (last.teams || []).find(t => t.name === myTeamName)
+    : null;
+  const kits = myTeamData?.availableFactories || 0;
+
+  if (kits < 1) {
+    alert('No factory kits available. Queue a FACTORY KIT from the Builder production panel first.');
+    return;
+  }
+
+  enterMapCommandMode('factory', {
+    action: 'deploy',
+    instructions: 'Click a moon (◉ or ○) to deploy one of your factory kits.'
+  });
+}
+
+window.deployAvailableFactory = deployAvailableFactory;
+window.getMoonAtCell = getMoonAtCell;
 window.startProbeCommandFromWar = startProbeCommandFromWar;

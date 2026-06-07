@@ -100,6 +100,35 @@ function closeCellPopup() {
   hideCellPopup();
 }
 
+function isTransitUnitState(state) {
+  return state === 'moving' || state === 'setting_up';
+}
+
+function addTransitBadge(cell, symbol, color, corner) {
+  cell.style.position = 'relative';
+  const badge = document.createElement('span');
+  badge.className = 'transit-badge';
+  const positions = {
+    'top-left': 'top:0;left:1px;',
+    'top-right': 'top:0;right:1px;',
+    'bottom-left': 'bottom:0;left:1px;',
+    'bottom-right': 'bottom:0;right:1px;'
+  };
+  badge.textContent = symbol;
+  badge.style.cssText = `position:absolute;${positions[corner] || positions['top-left']}font-size:8px;line-height:1;color:${color};text-shadow:0 0 2px #000;pointer-events:none;`;
+  cell.appendChild(badge);
+}
+
+function setTransitCellIcon(cell, symbol, color, background, fontSize) {
+  cell.textContent = symbol;
+  cell.style.color = color;
+  cell.style.background = background;
+  cell.style.fontSize = fontSize;
+  if (symbol === '✧' || symbol === '◎') {
+    cell.style.textShadow = symbol === '◎' ? '0 0 4px #ffcc33' : '0 0 3px #66ccff';
+  }
+}
+
 function renderMap(state) {
   const container = window.el('map-container');
   if (!container) {
@@ -143,12 +172,7 @@ function renderMap(state) {
     });
 
     const myMiners = (state.deployedMiners || []).filter(m => m.teamName === state.myTeam);
-    const minerCounts = {};
-    myMiners.forEach(m => {
-      const k = `${m.x},${m.y}`;
-      minerCounts[k] = (minerCounts[k] || 0) + 1;
-    });
-
+    const myFactories = (state.factories || []).filter(f => f.teamName === state.myTeam);
     const myProbes = (state.deployedProbes || []).filter(p => p.teamName === state.myTeam);
     const probeAt = {};
     myProbes.forEach(p => {
@@ -190,105 +214,84 @@ function renderMap(state) {
             cell.style.color = '#00ff9f';
             cell.style.fontSize = '15px';
             cell.style.background = '#0a2200';
-            const moveNote = anom.orbitRadius ? ' (orbiting)' : '';
-            let tip = (anom.name || 'Large Moon') + moveNote;
-            if (myTeamForDisc && typeof window.isAnomalyDiscoveredByTeam === 'function' && window.isAnomalyDiscoveredByTeam(anom, myTeamForDisc)) {
-              tip += ' — Mine/min: ' + window.formatMiningRatesForAnomaly(anom, 1);
-            } else {
-              tip += ' — probe to reveal resources';
-            }
-            cell.title = tip;
           } else if (anom.type === 'small_moon' || anom.type === 'normal_moon') {
             cell.textContent = '○';
             cell.style.color = '#66eeaa';
             cell.style.fontSize = '11px';
             cell.style.background = '#061a0a';
-            const moveNote = anom.orbitRadius ? ' (orbiting)' : '';
-            let tip = (anom.name || 'Small Moon') + moveNote;
-            if (myTeamForDisc && typeof window.isAnomalyDiscoveredByTeam === 'function' && window.isAnomalyDiscoveredByTeam(anom, myTeamForDisc)) {
-              tip += ' — Mine/min: ' + window.formatMiningRatesForAnomaly(anom, 1);
-            } else {
-              tip += ' — probe to reveal resources';
-            }
-            cell.title = tip;
           } else if (anom.type === 'gas_cloud') {
             cell.textContent = '☁';
             cell.style.color = '#66ccff';
             cell.style.fontSize = '13px';
             cell.style.background = '#001122';
-            let tip = (anom.name || 'Gas Cloud');
-            if (myTeamForDisc && typeof window.isAnomalyDiscoveredByTeam === 'function' && window.isAnomalyDiscoveredByTeam(anom, myTeamForDisc)) {
-              tip += ' — Mine/min: ' + window.formatMiningRatesForAnomaly(anom, 1);
-            } else {
-              tip += ' (probe to reveal resources)';
-            }
-            cell.title = tip;
           } else if (anom.type === 'asteroid_cluster') {
             cell.textContent = '◆';
             cell.style.color = '#ffaa66';
             cell.style.fontSize = '12px';
             cell.style.background = '#221100';
-            let tip = (anom.name || 'Asteroid Cluster');
-            if (myTeamForDisc && typeof window.isAnomalyDiscoveredByTeam === 'function' && window.isAnomalyDiscoveredByTeam(anom, myTeamForDisc)) {
-              tip += ' — Mine/min: ' + window.formatMiningRatesForAnomaly(anom, 1);
-            } else {
-              tip += ' (probe to reveal resources)';
-            }
-            cell.title = tip;
-          }
-        }
-
-        const cellKey = `${col},${row}`;
-        if (minerCounts[cellKey]) {
-          const cnt = minerCounts[cellKey];
-          const minersHere = myMiners.filter(m => m.x === col && m.y === row);
-          const hasMining = minersHere.some(m => m.state === 'mining');
-          const hasSetup = minersHere.some(m => m.state === 'setting_up');
-          cell.textContent = cnt > 1 ? `M${cnt}` : (hasMining ? 'M★' : 'M');
-          cell.style.color = hasMining ? '#66ffaa' : (hasSetup ? '#ffcc33' : '#aaffcc');
-          cell.style.fontSize = cnt > 1 ? '10px' : '12px';
-          cell.style.background = hasMining ? '#003322' : '#002211';
-          const states = minersHere.map(m => m.state).join(',');
-          cell.title = cnt + ' miner(s) here — ' + states;
-        }
-
-        const probeKey = `${col},${row}`;
-        if (probeAt[probeKey]) {
-          const p = probeAt[probeKey];
-          if (p.state === 'scanning') {
-            cell.textContent = '◎';
-            cell.style.color = '#ffdd66';
-            cell.style.fontSize = '13px';
-            cell.style.background = '#221a00';
-            cell.style.textShadow = '0 0 4px #ffcc33';
-            const remain = p.scanRemaining != null ? `${p.scanRemaining}s` : '…';
-            cell.title = `Probe scanning area — results in ${remain}`;
-          } else {
-            cell.textContent = '✧';
-            cell.style.color = '#66ccff';
-            cell.style.fontSize = '13px';
-            cell.style.background = '#001133';
-            cell.style.textShadow = '0 0 3px #66ccff';
-            cell.title = 'Probe en route (1 cell ~8s)';
           }
         }
 
         if (isMyStart && !isGasGiant) {
           cell.classList.add('team-start-cell');
-          const hasSymbol = cell.textContent && cell.textContent.trim().length > 0;
-          if (!hasSymbol) {
-            const center = document.createElement('span');
-            center.textContent = '★';
-            center.style.color = '#ffcc33';
-            center.style.fontSize = '14px';
-            cell.appendChild(center);
+          if (!cell.textContent || !cell.textContent.trim()) {
+            cell.textContent = '★';
+            cell.style.color = '#ffcc33';
+            cell.style.fontSize = '14px';
+            cell.style.background = '#1a2200';
           }
           const badge = document.createElement('span');
           badge.className = 'start-badge';
           badge.textContent = '★';
           cell.appendChild(badge);
-          const startNote = '★ Your team starting position';
-          cell.title = cell.title ? `${startNote} | ${cell.title}` : startNote;
+        }
+
+        const hasTerrain = isGasGiant || !!anom || isMyStart;
+        const cellKey = `${col},${row}`;
+
+        const transitMinersHere = myMiners.filter(m =>
+          m.x === col && m.y === row && isTransitUnitState(m.state)
+        );
+        if (transitMinersHere.length > 0) {
+          const settingUp = transitMinersHere.some(m => m.state === 'setting_up');
+          const sym = settingUp ? 'M⏳' : 'M→';
+          const label = transitMinersHere.length > 1 ? `${sym}${transitMinersHere.length}` : sym;
+          const color = settingUp ? '#ffcc33' : '#aaffcc';
+          if (hasTerrain) {
+            addTransitBadge(cell, label, color, 'top-left');
+          } else {
+            setTransitCellIcon(cell, label, color, '#002211', '11px');
+          }
+        }
+
+        const transitFactoriesHere = myFactories.filter(f =>
+          f.x === col && f.y === row && !f.isHome && isTransitUnitState(f.state)
+        );
+        if (transitFactoriesHere.length > 0) {
+          const settingUp = transitFactoriesHere.some(f => f.state === 'setting_up');
+          const sym = settingUp ? 'F⏳' : 'F→';
+          const label = transitFactoriesHere.length > 1 ? `${sym}${transitFactoriesHere.length}` : sym;
+          const color = settingUp ? '#ffcc66' : '#88bbff';
+          if (hasTerrain) {
+            addTransitBadge(cell, label, color, 'bottom-right');
+          } else if (!transitMinersHere.length) {
+            setTransitCellIcon(cell, label, color, '#001a33', '10px');
+          } else {
+            addTransitBadge(cell, label, color, 'bottom-right');
+          }
+        }
+
+        const probe = probeAt[cellKey];
+        if (probe) {
+          const sym = probe.state === 'scanning' ? '◎' : '✧';
+          const color = probe.state === 'scanning' ? '#ffdd66' : '#66ccff';
+          const bg = probe.state === 'scanning' ? '#221a00' : '#001133';
+          const terrainOrOtherTransit = hasTerrain || transitMinersHere.length > 0 || transitFactoriesHere.length > 0;
+          if (terrainOrOtherTransit) {
+            addTransitBadge(cell, sym, color, 'top-right');
+          } else {
+            setTransitCellIcon(cell, sym, color, bg, '12px');
+          }
         }
 
         const inCommandMode = (typeof window.isInCommandMode === 'function') && window.isInCommandMode();
@@ -373,12 +376,24 @@ function buildCellInfo(state, col, row) {
   const myMinersHere = (state.deployedMiners || []).filter(m =>
     m.teamName === myTeam && m.x === col && m.y === row
   );
+  const myFactoriesHere = (state.factories || []).filter(f =>
+    f.teamName === myTeam && f.x === col && f.y === row
+  );
+  const myProbeHere = (state.deployedProbes || []).find(p =>
+    p.teamName === myTeam && p.x === col && p.y === row
+  );
+  const gasGiant = mapData.gasGiant;
+  const isGasGiant = gasGiant && col === gasGiant.x && row === gasGiant.y;
 
   const cellLabel = `${String.fromCharCode(65 + col)}${row + 1}`;
   let html = `<div class="popup-header">`;
   html += `<strong>Cell ${cellLabel}</strong>`;
   html += `<button type="button" class="popup-close" onclick="closeCellPopup()" title="Close">×</button>`;
   html += `</div>`;
+
+  if (isGasGiant) {
+    html += `<div class="section"><span class="object-name">Gas Giant</span><br><span style="color:#88aa99;">Central star system body — not targetable</span></div>`;
+  }
 
   if (anomHere) {
     const name = anomHere.name || `${anomHere.type} at ${col},${row}`;
@@ -410,13 +425,17 @@ function buildCellInfo(state, col, row) {
     html += `</div>`;
   }
 
+  const unitsHere = myMinersHere.length + myFactoriesHere.length + (myProbeHere ? 1 : 0);
+  if (unitsHere > 0) {
+    html += `<div class="section"><strong>Units at this site (${unitsHere}):</strong>`;
+  }
+
   if (myMinersHere.length > 0) {
-    html += `<div class="section"><strong>Your Miners here:</strong>`;
+    html += `<div style="font-size:9px; color:#88aa99; margin:3px 0 1px;">Miners</div>`;
     myMinersHere.forEach(m => {
       const stateLabel = m.state === 'mining' ? '⛏ mining' : (m.state === 'setting_up' ? '⏳ setting up' : '→ moving');
       html += `<div style="margin:2px 0;">${stateLabel} <span style="color:#669977;">(id ${m.id.slice(-6)})</span></div>`;
     });
-    html += `</div>`;
 
     if (myRole === 'builder') {
       const redirectable = myMinersHere.filter(m => m.state === 'moving');
@@ -431,12 +450,66 @@ function buildCellInfo(state, col, row) {
     }
   }
 
+  if (myFactoriesHere.length > 0) {
+    html += `<div style="font-size:9px; color:#88aa99; margin:5px 0 1px;">Factories</div>`;
+    myFactoriesHere.forEach(f => {
+      let stateLabel = f.isHome ? '🏠 home base' : '→ moving';
+      if (f.state === 'operational') stateLabel = f.isHome ? '🏠 home (operational)' : '▶ operational';
+      else if (f.state === 'setting_up') {
+        const eta = f.setupRemaining != null ? `${f.setupRemaining}s` : '…';
+        stateLabel = `⏳ setting up (${eta})`;
+      } else if (f.state === 'moving') {
+        const dest = f.moonName || (f.targetX != null ? `(${f.targetX},${f.targetY})` : 'moon');
+        stateLabel = `→ en route to ${dest}`;
+      }
+      html += `<div style="margin:2px 0;">${stateLabel} <span style="color:#6699bb;">(id ${f.id.slice(-6)})</span></div>`;
+    });
+
+    if (myRole === 'builder') {
+      const redirectable = myFactoriesHere.filter(f => !f.isHome && f.state === 'moving');
+      if (redirectable.length > 0) {
+        html += `<div class="popup-actions">`;
+        html += `<div style="font-size:9px; color:#88aa99; margin-bottom:2px;">Redirect factory kit (Builder only):</div>`;
+        redirectable.forEach(f => {
+          html += `<button class="popup-btn" onclick="redirectFactoryFromPopup('${f.id}', ${col}, ${row})">Redirect ${f.id.slice(-6)}</button>`;
+        });
+        html += `</div>`;
+      }
+    }
+  }
+
+  if (myProbeHere) {
+    html += `<div style="font-size:9px; color:#88aa99; margin:5px 0 1px;">Probes</div>`;
+    if (myProbeHere.state === 'scanning') {
+      const remain = myProbeHere.scanRemaining != null ? `${myProbeHere.scanRemaining}s` : '…';
+      html += `<div style="margin:2px 0;">◎ scanning area — results in ${remain}</div>`;
+    } else {
+      html += `<div style="margin:2px 0;">✧ en route (~8s per cell)</div>`;
+    }
+  }
+
+  if (unitsHere > 0) {
+    html += `</div>`;
+  }
+
   const myStartCell = (typeof window.resolveMyStart === 'function') ? window.resolveMyStart(state) : state.myStart;
   if (myStartCell && Number(myStartCell.x) === col && Number(myStartCell.y) === row) {
     html += `<div class="section">★ Your team's starting position</div>`;
   }
 
   return html;
+}
+
+function redirectFactoryFromPopup(factoryId, currentCol, currentRow) {
+  hideCellPopup();
+
+  if (typeof window.enterMapCommandMode === 'function') {
+    window.enterMapCommandMode('factory', {
+      factoryId: factoryId,
+      action: 'move',
+      instructions: `Redirect factory kit ${factoryId.slice(-6)} to a different moon`
+    });
+  }
 }
 
 function redirectMinerFromPopup(minerId, currentCol, currentRow) {
@@ -462,4 +535,5 @@ function redirectMinerFromPopup(minerId, currentCol, currentRow) {
 window.renderMap = renderMap;
 window.buildCellInfo = buildCellInfo;
 window.redirectMinerFromPopup = redirectMinerFromPopup;
+window.redirectFactoryFromPopup = redirectFactoryFromPopup;
 window.closeCellPopup = closeCellPopup;

@@ -97,6 +97,8 @@ function initDb() {
     `ALTER TABLE teams ADD COLUMN deployed_miners_json TEXT`,
     // Factory multi-queue system (one build queue per operational factory)
     `ALTER TABLE teams ADD COLUMN build_queues_json TEXT`,
+    `ALTER TABLE teams ADD COLUMN available_factories INTEGER DEFAULT 0`,
+    `ALTER TABLE games ADD COLUMN factories_json TEXT`,
     // MINING: anomalies (with discovery) JSON on map table
     `ALTER TABLE game_maps ADD COLUMN anomalies TEXT`
   ];
@@ -169,7 +171,9 @@ function loadAllGames() {
         // MINING Phase 6
         availableMiners: t.available_miners ?? 0,
         probes: t.probes ?? 0,
-        deployedMiners: t.deployed_miners_json ? JSON.parse(t.deployed_miners_json) : null
+        availableFactories: t.available_factories ?? 0,
+        deployedMiners: t.deployed_miners_json ? JSON.parse(t.deployed_miners_json) : null,
+        buildQueues: t.build_queues_json ? JSON.parse(t.build_queues_json) : null
       })),
       players: players.map(p => ({
         name: p.name,
@@ -184,7 +188,8 @@ function loadAllGames() {
         arrivalTime: f.arrival_time
       })),
       mapData,
-      teamStarts: starts
+      teamStarts: starts,
+      factories: g.factories_json ? JSON.parse(g.factories_json) : null
     });
   }
   return result;
@@ -202,10 +207,10 @@ function upsertTeam(gameCode, teamName, initialData = {}) {
     INSERT INTO teams (
       game_code, name,
       resources_json, frigates, destroyers, buildings_json,
-      factory_hp, available_miners, probes, deployed_miners_json,
+      factory_hp, available_miners, probes, available_factories, deployed_miners_json,
       build_queues_json
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(game_code, name) DO UPDATE SET
       resources_json = excluded.resources_json,
       frigates = excluded.frigates,
@@ -214,6 +219,7 @@ function upsertTeam(gameCode, teamName, initialData = {}) {
       factory_hp = excluded.factory_hp,
       available_miners = excluded.available_miners,
       probes = excluded.probes,
+      available_factories = excluded.available_factories,
       deployed_miners_json = excluded.deployed_miners_json,
       build_queues_json = excluded.build_queues_json
   `);
@@ -228,9 +234,17 @@ function upsertTeam(gameCode, teamName, initialData = {}) {
     initialData.factoryHP ?? 100,
     initialData.availableMiners ?? 0,
     initialData.probes ?? 0,
+    initialData.availableFactories ?? 0,
     initialData.deployedMiners ? JSON.stringify(initialData.deployedMiners) : null,
     initialData.buildQueues ? JSON.stringify(initialData.buildQueues) : null
   );
+}
+
+function saveGameFactories(gameCode, factories) {
+  const stmt = getDb().prepare(`
+    UPDATE games SET factories_json = ? WHERE code = ?
+  `);
+  stmt.run(JSON.stringify(factories), gameCode);
 }
 
 function updateTeamResources(gameCode, teamName, updates) {
@@ -361,6 +375,7 @@ module.exports = {
   initDb,
   getDb,
   saveGame,
+  saveGameFactories,
   loadAllGames,
   deleteGame,
   upsertTeam,

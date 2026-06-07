@@ -37,6 +37,7 @@ function resolveMineLine(anomaly, teamName, rigsAtSite, noAnomLabel = 'off anoma
 
 function factoryLocationLabel(factory) {
   if (factory.isHome) return 'Home Base';
+  if (factory.moonName) return factory.moonName;
   return `Cell ${cellLabel(factory.x, factory.y)}`;
 }
 
@@ -125,9 +126,10 @@ function renderMiningSection(state, myTeamName) {
 }
 
 function renderFactorySection(state, myTeamName, myTeamData) {
-  const factories = (state.factories || []).filter(
-    f => f.teamName === myTeamName && f.state === 'operational'
-  );
+  const allFactories = (state.factories || []).filter(f => f.teamName === myTeamName);
+  const factories = allFactories.filter(f => f.state === 'operational');
+  const enRoute = allFactories.filter(f => !f.isHome && f.state === 'moving').length;
+  const settingUp = allFactories.filter(f => !f.isHome && f.state === 'setting_up').length;
   const factoryCount = factories.length || 1;
   const kits = myTeamData.availableFactories || 0;
   const myBuild = state.builds?.[myTeamName];
@@ -137,12 +139,30 @@ function renderFactorySection(state, myTeamName, myTeamData) {
   let html = `<div>`;
   html += `<div class="stat-row" style="font-size:11px; margin-bottom:3px;">`;
   html += `<span><strong style="color:#66ccff;">🏭 FACTORIES</strong></span>`;
-  html += `<span style="font-size:10px; color:#006633;">${factoryCount} operational${kits > 0 ? ` · ${kits} kit${kits > 1 ? 's' : ''} ready` : ''}</span>`;
+  let statusBits = `${factoryCount} operational`;
+  if (enRoute > 0) statusBits += ` · ${enRoute} en route`;
+  if (settingUp > 0) statusBits += ` · ${settingUp} setting up`;
+  if (kits > 0) statusBits += ` · ${kits} kit${kits > 1 ? 's' : ''} ready`;
+  html += `<span style="font-size:10px; color:#006633;">${statusBits}</span>`;
   html += `</div>`;
 
   html += `<div style="border-left:2px solid #003344; padding-left:6px;">`;
 
+  const inProgress = allFactories.filter(f => !f.isHome && f.state !== 'operational');
   const factoryList = factories.length > 0 ? factories : [{ id: 'home', isHome: true, x: 0, y: 0, state: 'operational' }];
+
+  inProgress.forEach((factory) => {
+    const dest = factory.moonName || cellLabel(factory.targetX ?? factory.x, factory.targetY ?? factory.y);
+    let statusLine = `<span style="color:#88ccff;">▶ en route to ${dest}</span>`;
+    if (factory.state === 'setting_up') {
+      const eta = factory.setupRemaining != null ? `${factory.setupRemaining}s` : '…';
+      statusLine = `<span style="color:#ffcc66;">▶ setting up at ${dest} (${eta})</span>`;
+    }
+    html += `<div style="margin:3px 0 4px; font-size:10px;">`;
+    html += `<strong style="color:#88bbdd;">Factory kit</strong>`;
+    html += `<div>${statusLine}</div>`;
+    html += `</div>`;
+  });
 
   factoryList.forEach((factory, idx) => {
     const loc = factoryLocationLabel(factory);

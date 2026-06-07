@@ -678,6 +678,17 @@
             </button>
           </div>
 
+          <div class="panel" style="margin:0 0 6px 0; padding:6px 8px; background:#001a33; border-color:#003366;">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+              <span style="font-size:12px;"><strong>AVAILABLE FACTORY KITS</strong> <span style="font-size:9px;color:#006633;">(deploy to moons)</span></span>
+              <span id="builder-available-factories" class="big-number" style="font-size:22px; color:#66ccff;">0</span>
+            </div>
+            <div style="font-size:9px; color:#006633; margin-top:2px;">Queue factory kits above, then deploy to a moon for an extra build queue + synthesis.</div>
+            <button class="btn btn-small" onclick="deployAvailableFactory()" style="margin-top:6px; width:100%; font-size:11px;">
+              DEPLOY FACTORY TO MOON
+            </button>
+          </div>
+
           <!-- Miner deployment is now Map-centric (not controlled from Builder UI).
                Builder produces miners via the queue. Actual deployment / movement orders happen on the Map tab. -->
 
@@ -752,11 +763,11 @@
             <!-- Grid is built dynamically by renderMap() -->
           </div>
           <div style="font-size:10px; color:#006633; margin-top:8px; text-align:center; border:1px dashed #003322; padding:4px;">
-            <strong>Tip:</strong> Use this tab to deploy miners (click DEPLOY MINER button from Builder tab first), watch probes move, and see moon orbits.<br>
+            <strong>Tip:</strong> Deploy miners and factory kits from the Builder tab, watch probes move, and see moon orbits.<br>
             If the map is blank, check the browser console (F12) for errors.
           </div>
           <div style="font-size:10px; color:#006633; margin-top:6px; text-align:center;">
-            ★ = Your team start (gold border). Moons: ◉ Large • ○ Small. ☁ Gas • ◆ Asteroid. Miners=M. ✧ = Probe en route. ◎ = Probe scanning (30s).
+            ★ = Team base (gold border). Moons: ◉ Large • ○ Small. ☁ Gas • ◆ Asteroid. M→/M⏳ F→/F⏳ = units in transit or setting up. Hover any cell for deployed units. ✧ probe en route · ◎ scanning.
           </div>
 
           <!-- Popup for cell details (delayed rich hover) -->
@@ -1325,6 +1336,11 @@ function render(state) {
   const minerCountEl = el('builder-available-miners');
   if (minerCountEl) {
     minerCountEl.textContent = (myTeamData.availableMiners != null) ? myTeamData.availableMiners : 0;
+  }
+
+  const factoryKitEl = el('builder-available-factories');
+  if (factoryKitEl) {
+    factoryKitEl.textContent = (myTeamData.availableFactories != null) ? myTeamData.availableFactories : 0;
   }
 
   // Probes (War Commander asset per playtest; visible to whole team)
