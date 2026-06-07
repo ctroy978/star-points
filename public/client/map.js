@@ -3,7 +3,102 @@
 // Depends on: window.el, mining-rates.js, command-system.js (loaded before this file).
 
 let popupHoverTimer = null;
+let popupHideTimer = null;
+let popupAutoDismissTimer = null;
 const POPUP_HOVER_DELAY_MS = 420;
+const POPUP_HIDE_DELAY_MS = 400;
+const POPUP_AUTO_DISMISS_MS = 10000;
+
+function cancelPopupHide() {
+  if (popupHideTimer) {
+    clearTimeout(popupHideTimer);
+    popupHideTimer = null;
+  }
+}
+
+function cancelPopupAutoDismiss() {
+  if (popupAutoDismissTimer) {
+    clearTimeout(popupAutoDismissTimer);
+    popupAutoDismissTimer = null;
+  }
+}
+
+function hideCellPopup(popup) {
+  popup = popup || window.el('cell-popup');
+  if (!popup) return;
+  cancelPopupHide();
+  cancelPopupAutoDismiss();
+  if (popupHoverTimer) {
+    clearTimeout(popupHoverTimer);
+    popupHoverTimer = null;
+  }
+  popup.style.display = 'none';
+  popup.style.pointerEvents = 'none';
+}
+
+function schedulePopupHide(popup) {
+  cancelPopupHide();
+  popupHideTimer = setTimeout(() => hideCellPopup(popup), POPUP_HIDE_DELAY_MS);
+}
+
+function schedulePopupAutoDismiss(popup) {
+  cancelPopupAutoDismiss();
+  popupAutoDismissTimer = setTimeout(() => hideCellPopup(popup), POPUP_AUTO_DISMISS_MS);
+}
+
+function showCellPopup(popup, html, cell, cursorEvent) {
+  popup.innerHTML = html;
+  popup.style.display = 'block';
+
+  const hasActions = !!popup.querySelector('.popup-actions');
+  positionCellPopup(popup, cell, cursorEvent, hasActions);
+  popup.style.pointerEvents = 'auto';
+
+  cancelPopupHide();
+  schedulePopupAutoDismiss(popup);
+}
+
+function ensureCellPopup() {
+  let popup = window.el('cell-popup');
+  if (!popup) {
+    popup = document.createElement('div');
+    popup.id = 'cell-popup';
+    document.body.appendChild(popup);
+  } else if (popup.parentElement !== document.body) {
+    document.body.appendChild(popup);
+  }
+  return popup;
+}
+
+function positionCellPopup(popup, cell, cursorEvent, hasActions) {
+  popup.style.position = 'fixed';
+  if (hasActions && cell) {
+    const rect = cell.getBoundingClientRect();
+    popup.style.left = rect.left + 'px';
+    popup.style.top = (rect.bottom + 4) + 'px';
+  } else {
+    popup.style.left = (cursorEvent.clientX + 14) + 'px';
+    popup.style.top = (cursorEvent.clientY + 10) + 'px';
+  }
+}
+
+function ensurePopupHoverHandlers(popup) {
+  if (popup._hoverHandlersAttached) return;
+  popup._hoverHandlersAttached = true;
+  popup.addEventListener('mouseenter', () => {
+    cancelPopupHide();
+    schedulePopupAutoDismiss(popup);
+    if (popupHoverTimer) {
+      clearTimeout(popupHoverTimer);
+      popupHoverTimer = null;
+    }
+  });
+  popup.addEventListener('mouseleave', () => schedulePopupHide(popup));
+}
+
+function closeCellPopup() {
+  hideCellPopup();
+}
 
 function renderMap(state) {
   const container = window.el('map-container');
@@ -217,14 +312,13 @@ function renderMap(state) {
 
     container.appendChild(wrapper);
 
-    const popup = window.el('cell-popup') || document.createElement('div');
-    popup.id = 'cell-popup';
-    if (!window.el('cell-popup')) document.body.appendChild(popup);
+    const popup = ensureCellPopup();
 
     if (popupHoverTimer) {
       clearTimeout(popupHoverTimer);
       popupHoverTimer = null;
     }
+    ensurePopupHoverHandlers(popup);
 
     const cells = wrapper.querySelectorAll('.map-cell');
     cells.forEach(cell => {
@@ -233,29 +327,26 @@ function renderMap(state) {
       if (Number.isNaN(col) || Number.isNaN(row)) return;
 
       cell.addEventListener('mouseenter', (e) => {
+        cancelPopupHide();
         if (popupHoverTimer) clearTimeout(popupHoverTimer);
 
         popupHoverTimer = setTimeout(() => {
           const infoHtml = buildCellInfo(state, col, row);
           if (!infoHtml) return;
-
-          popup.innerHTML = infoHtml;
-          popup.style.display = 'block';
-          popup.style.left = (e.pageX + 14) + 'px';
-          popup.style.top = (e.pageY + 10) + 'px';
-
-          const hasActions = popup.querySelector('.popup-actions');
-          popup.style.pointerEvents = hasActions ? 'auto' : 'none';
+          showCellPopup(popup, infoHtml, cell, e);
         }, POPUP_HOVER_DELAY_MS);
       });
 
-      cell.addEventListener('mouseleave', () => {
+      cell.addEventListener('mouseleave', (e) => {
         if (popupHoverTimer) {
           clearTimeout(popupHoverTimer);
           popupHoverTimer = null;
         }
-        popup.style.display = 'none';
-        popup.style.pointerEvents = 'none';
+        const related = e.relatedTarget;
+        if (related && popup.contains(related)) return;
+        if (popup.style.display === 'block') {
+          schedulePopupHide(popup);
+        }
       });
     });
   } catch (e) {
@@ -283,7 +374,11 @@ function buildCellInfo(state, col, row) {
     m.teamName === myTeam && m.x === col && m.y === row
   );
 
-  let html = `<div><strong>Cell ${String.fromCharCode(65 + col)}${row + 1}</strong></div>`;
+  const cellLabel = `${String.fromCharCode(65 + col)}${row + 1}`;
+  let html = `<div class="popup-header">`;
+  html += `<strong>Cell ${cellLabel}</strong>`;
+  html += `<button type="button" class="popup-close" onclick="closeCellPopup()" title="Close">×</button>`;
+  html += `</div>`;
 
   if (anomHere) {
     const name = anomHere.name || `${anomHere.type} at ${col},${row}`;
@@ -345,8 +440,7 @@ function buildCellInfo(state, col, row) {
 }
 
 function redirectMinerFromPopup(minerId, currentCol, currentRow) {
-  const popup = window.el('cell-popup');
-  if (popup) popup.style.display = 'none';
+  hideCellPopup();
 
   if (typeof window.enterMapCommandMode === 'function') {
     window.enterMapCommandMode('miner', {
@@ -368,3 +462,4 @@ function redirectMinerFromPopup(minerId, currentCol, currentRow) {
 window.renderMap = renderMap;
 window.buildCellInfo = buildCellInfo;
 window.redirectMinerFromPopup = redirectMinerFromPopup;
+window.closeCellPopup = closeCellPopup;

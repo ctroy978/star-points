@@ -303,6 +303,24 @@
     display: none;
     line-height: 1.35;
   }
+  #cell-popup .popup-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  #cell-popup .popup-close {
+    flex-shrink: 0;
+    font-size: 14px;
+    line-height: 1;
+    padding: 0 4px;
+    margin: -2px -2px 0 0;
+    background: transparent;
+    border: 1px solid #004422;
+    color: #88aa99;
+    cursor: pointer;
+  }
+  #cell-popup .popup-close:hover { color: #aaffcc; border-color: #006633; background: #002200; }
   #cell-popup .object-name { font-weight: bold; color: #66ffaa; }
   #cell-popup .section { margin-top: 4px; border-top: 1px dotted #003322; padding-top: 3px; }
   #cell-popup .popup-actions { margin-top: 6px; padding-top: 4px; border-top: 1px solid #003322; }
